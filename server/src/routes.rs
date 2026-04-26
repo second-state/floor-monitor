@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
+use serde::Deserialize;
 use std::sync::Arc;
 use tera::Context;
 
@@ -149,6 +150,63 @@ pub async fn api_events(State(state): State<Arc<AppState>>) -> impl IntoResponse
     };
 
     axum::response::Sse::new(stream)
+}
+
+// ---------------------------------------------------------------------------
+// POST API endpoints for dashboard commands
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct AskRequest {
+    pub question: String,
+}
+
+/// POST /api/ask — ask a visual question about the current frame
+pub async fn api_ask(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<AskRequest>,
+) -> impl IntoResponse {
+    let cameras = state.cameras.read().await;
+    let frame = cameras.values().find_map(|c| c.latest_frame.clone());
+    drop(cameras);
+
+    let Some(jpeg) = frame else {
+        return axum::Json(
+            serde_json::json!({"error": "No frame available (no camera connected)"}),
+        );
+    };
+
+    match state.vlm.infer(&jpeg, &body.question).await {
+        Ok((text, secs)) => axum::Json(serde_json::json!({"answer": text, "infer_secs": secs})),
+        Err(e) => axum::Json(serde_json::json!({"error": format!("Inference error: {}", e)})),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CommandRequest {
+    pub action: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+    pub camera_id: Option<String>,
+}
+
+/// POST /api/command — send a command (ptz, patrol) to a camera
+pub async fn api_command(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<CommandRequest>,
+) -> impl IntoResponse {
+    let result = if let Some(ref cam_id) = body.camera_id {
+        crate::ws::send_camera_command(&state, cam_id, &body.action, body.params.clone())
+            .await
+            .map(|_| cam_id.clone())
+    } else {
+        crate::ws::send_command_to_any_camera(&state, &body.action, body.params.clone()).await
+    };
+
+    match result {
+        Ok(cam_id) => axum::Json(serde_json::json!({"ok": true, "camera_id": cam_id})),
+        Err(e) => axum::Json(serde_json::json!({"ok": false, "error": e})),
+    }
 }
 
 /// Load Tera templates from the templates/ directory.

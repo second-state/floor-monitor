@@ -1,4 +1,4 @@
-// Floor Monitor — Dashboard live updates via SSE + preview polling
+// Floor Monitor — Dashboard live updates via SSE + preview polling + controls
 
 (function () {
     "use strict";
@@ -79,7 +79,6 @@
         imgs.forEach(function (img) {
             const src = img.getAttribute("src");
             if (src) {
-                // Append cache-buster
                 const base = src.split("?")[0];
                 img.src = base + "?t=" + Date.now();
             }
@@ -90,3 +89,89 @@
     connectSSE();
     setInterval(pollPreviews, PREVIEW_POLL_MS);
 })();
+
+// --- Controls (global scope for onclick handlers) ---
+
+function showResult(elemId, text, isError) {
+    var el = document.getElementById(elemId);
+    if (!el) return;
+    el.textContent = text;
+    el.className = "control-result" + (isError ? " error" : " success");
+    // Auto-clear after 10 seconds
+    setTimeout(function () {
+        el.textContent = "";
+        el.className = "control-result";
+    }, 10000);
+}
+
+function askQuestion() {
+    var input = document.getElementById("ask-input");
+    var btn = document.getElementById("ask-btn");
+    var question = input.value.trim();
+    if (!question) return;
+
+    btn.disabled = true;
+    btn.textContent = "Thinking...";
+    showResult("ask-result", "Analyzing...", false);
+
+    fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: question }),
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.error) {
+                showResult("ask-result", data.error, true);
+            } else {
+                var text = data.answer || "(empty response)";
+                if (data.infer_secs) {
+                    text += " (" + data.infer_secs.toFixed(1) + "s)";
+                }
+                showResult("ask-result", text, false);
+            }
+        })
+        .catch(function (e) {
+            showResult("ask-result", "Request failed: " + e, true);
+        })
+        .finally(function () {
+            btn.disabled = false;
+            btn.textContent = "Ask";
+        });
+}
+
+function sendPtz(direction) {
+    sendCommand("ptz", { direction: direction });
+}
+
+function sendCommand(action, params) {
+    showResult("ptz-result", "Sending " + action + "...", false);
+
+    fetch("/api/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: action, params: params || {} }),
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.ok) {
+                showResult("ptz-result", action + " sent to " + data.camera_id, false);
+            } else {
+                showResult("ptz-result", data.error || "Command failed", true);
+            }
+        })
+        .catch(function (e) {
+            showResult("ptz-result", "Request failed: " + e, true);
+        });
+}
+
+function downloadSnapshot() {
+    // Find the first camera preview image and open its snapshot URL
+    var img = document.querySelector(".preview-img");
+    if (img) {
+        var src = img.getAttribute("src").split("?")[0];
+        window.open(src, "_blank");
+    } else {
+        alert("No camera connected");
+    }
+}

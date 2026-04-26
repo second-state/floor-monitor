@@ -32,6 +32,43 @@
             </div>
         </section>
 
+        <section class="controls-section">
+            <h2>Controls</h2>
+
+            <!-- Ask a visual question -->
+            <div class="control-group">
+                <label for="ask-input">Ask about the camera feed</label>
+                <div class="input-row">
+                    <input type="text" id="ask-input" placeholder="e.g. How many people are there?"
+                           onkeydown="if(event.key==='Enter') askQuestion()">
+                    <button onclick="askQuestion()" id="ask-btn">Ask</button>
+                </div>
+                <div id="ask-result" class="control-result"></div>
+            </div>
+
+            <!-- PTZ controls -->
+            <div class="control-group">
+                <label>Camera Movement</label>
+                <div class="ptz-grid">
+                    <div class="ptz-spacer"></div>
+                    <button class="ptz-btn" onclick="sendPtz('tilt_up')" title="Tilt Up">&#9650;</button>
+                    <div class="ptz-spacer"></div>
+                    <button class="ptz-btn" onclick="sendPtz('pan_left')" title="Pan Left">&#9664;</button>
+                    <button class="ptz-btn ptz-center" onclick="sendCommand('patrol', {})" title="Patrol">&#8634;</button>
+                    <button class="ptz-btn" onclick="sendPtz('pan_right')" title="Pan Right">&#9654;</button>
+                    <div class="ptz-spacer"></div>
+                    <button class="ptz-btn" onclick="sendPtz('tilt_down')" title="Tilt Down">&#9660;</button>
+                    <div class="ptz-spacer"></div>
+                </div>
+                <div id="ptz-result" class="control-result"></div>
+            </div>
+
+            <!-- Snapshot -->
+            <div class="control-group">
+                <button class="btn-secondary" onclick="downloadSnapshot()">Download Snapshot</button>
+            </div>
+        </section>
+
         <section class="info-section">
             <h2>Server Info</h2>
             <table class="info-table">

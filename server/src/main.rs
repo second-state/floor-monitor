@@ -132,6 +132,8 @@ async fn main() {
         .route("/api/results", get(routes::api_results))
         .route("/api/snapshot/{camera_id}", get(routes::api_snapshot))
         .route("/api/events", get(routes::api_events))
+        .route("/api/ask", axum::routing::post(routes::api_ask))
+        .route("/api/command", axum::routing::post(routes::api_command))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state);
 

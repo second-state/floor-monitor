@@ -209,3 +209,121 @@ main {
     font-style: italic;
     font-size: 0.9rem;
 }
+
+/* Controls section */
+.controls-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.control-group {
+    margin-bottom: 0.75rem;
+}
+
+.control-group label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+    color: var(--text);
+}
+
+.input-row {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.input-row input[type="text"] {
+    flex: 1;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    outline: none;
+}
+
+.input-row input[type="text"]:focus {
+    border-color: var(--accent);
+}
+
+.input-row button, .btn-secondary {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: var(--accent);
+    color: white;
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.input-row button:hover, .btn-secondary:hover {
+    opacity: 0.9;
+}
+
+.input-row button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: var(--card-bg);
+    color: var(--accent);
+    width: 100%;
+}
+
+.control-result {
+    font-size: 0.8rem;
+    margin-top: 0.3rem;
+    min-height: 1.2em;
+    word-break: break-word;
+}
+
+.control-result.success { color: var(--accent); }
+.control-result.error { color: var(--danger); }
+
+/* PTZ directional pad */
+.ptz-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+    max-width: 160px;
+    margin: 0.3rem auto;
+}
+
+.ptz-btn {
+    width: 48px;
+    height: 40px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text);
+}
+
+.ptz-btn:hover {
+    background: var(--accent-light);
+    border-color: var(--accent);
+}
+
+.ptz-btn:active {
+    background: var(--accent);
+    color: white;
+}
+
+.ptz-center {
+    background: var(--accent-light);
+    font-size: 1.3rem;
+}
+
+.ptz-spacer {
+    width: 48px;
+    height: 40px;
+}
