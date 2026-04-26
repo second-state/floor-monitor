@@ -367,4 +367,4 @@ OpenAI-compatible APIs.
 
 ## License
 
-Not yet chosen. Treat as "all rights reserved" for now.
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
