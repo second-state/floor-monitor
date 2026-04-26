@@ -61,6 +61,12 @@
 
         resultsContainer.prepend(entry);
 
+        // Update frame count in camera card
+        if (r.camera_id && r.frame_no) {
+            var fc = document.getElementById("frame-count-" + r.camera_id);
+            if (fc) fc.textContent = "Frame #" + r.frame_no;
+        }
+
         // Cap displayed results
         while (resultsContainer.children.length > 100) {
             resultsContainer.removeChild(resultsContainer.lastChild);

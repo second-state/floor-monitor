@@ -16,7 +16,7 @@
                     <div class="camera-header">
                         <span class="status-dot {% if cam.running %}connected{% else %}disconnected{% endif %}"></span>
                         <strong>{{ cam.name }}</strong>
-                        <span class="frame-count">Frame #{{ cam.frame_no }}</span>
+                        <span class="frame-count" id="frame-count-{{ cam.camera_id }}">Frame #{{ cam.frame_no }}</span>
                     </div>
                     <div class="camera-preview">
                         {% if cam.running %}
