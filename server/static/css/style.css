@@ -1,0 +1,211 @@
+/* Floor Monitor — Dashboard Styles */
+
+:root {
+    --bg: #f5f5f5;
+    --card-bg: #ffffff;
+    --text: #333333;
+    --text-muted: #888888;
+    --border: #e0e0e0;
+    --accent: #2e7d32;
+    --accent-light: #e8f5e9;
+    --danger: #c62828;
+    --danger-light: #ffebee;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+}
+
+header {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+header nav {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+header nav a {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+header nav a:hover { color: var(--accent); }
+
+main {
+    padding: 1rem 1.5rem;
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+/* Status dot */
+.status-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+.status-dot.connected { background: var(--accent); }
+.status-dot.disconnected { background: var(--text-muted); }
+
+/* Dashboard layout */
+.dashboard {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+}
+
+@media (max-width: 960px) {
+    .dashboard { grid-template-columns: 1fr; }
+}
+
+.panel h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: var(--text);
+}
+
+/* Camera cards */
+.camera-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.camera-card.active { border-color: var(--accent); }
+
+.camera-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.frame-count {
+    margin-left: auto;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
+.camera-preview {
+    border-radius: 4px;
+    overflow: hidden;
+    background: #000;
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.preview-img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.no-preview {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+/* Info table */
+.info-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.info-table {
+    width: 100%;
+    font-size: 0.85rem;
+}
+
+.info-table td {
+    padding: 0.25rem 0.5rem;
+    vertical-align: top;
+}
+
+.info-table td:first-child {
+    font-weight: 600;
+    white-space: nowrap;
+    width: 100px;
+}
+
+.info-table code {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    background: var(--bg);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+}
+
+.tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    background: var(--accent-light);
+    color: var(--accent);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    margin: 0.1rem;
+}
+
+/* Results */
+#results-container {
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+}
+
+.result-entry {
+    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 0;
+}
+
+.result-entry:last-child { border-bottom: none; }
+
+.result-header {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+}
+
+.result-text {
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.muted {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 0.9rem;
+}

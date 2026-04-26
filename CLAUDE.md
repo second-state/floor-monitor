@@ -1,0 +1,162 @@
+# Floor Monitor
+
+## Project Overview
+
+A two-project system for real-time camera monitoring with VLM (Vision-Language Model) analysis. Camera clients capture frames and stream them to a central server via WebSocket. The server runs VLM inference, serves a live web dashboard, and optionally pushes alerts/summaries via Telegram.
+
+**Tech Stack:**
+- **Server:** Rust, Axum, Tera templates, HTML/CSS/JS (no build step), WebSocket, SSE
+- **Camera client (Python):** OpenCV, websockets, TOML config
+- **Camera client (Rust):** nokhwa, tokio-tungstenite, TOML config
+
+### Architecture
+
+```
+camera/ (Python or Rust)          server/ (Rust/Axum)
+┌─────────────────────┐          ┌──────────────────────────────┐
+│ Capture frames      │──WebSocket──▶│ WebSocket handler           │
+│ (USB / RTSP)        │          │ VLM inference (Ollama/OpenAI) │
+│ Encode JPEG         │◀──Result──│ Monitor profiles & alerts    │
+│ Send to server      │          │ Telegram bot                 │
+└─────────────────────┘          │ Web UI (Tera templates + SSE)│
+                                 └──────────────────────────────┘
+```
+
+### Core Features
+
+1. **WebSocket camera feed** — Camera clients register, stream JPEG frames; server processes and returns results.
+2. **Generic VLM/LLM backend** — Supports any OpenAI-compatible endpoint (vLLM, LiteLLM, OpenAI) or Ollama native API. Auto-detected from URL path.
+3. **Web dashboard** — Live camera preview, analysis results via SSE, camera status. All HTML/CSS/JS in editable template files.
+4. **Monitor profiles** — Domain-specific structured JSON prompts (Kid / Office / Retail / Home Security) with alert and summary pipelines.
+5. **Telegram bot** — Slash commands (`/snapshot`, `/status`, `/help`) and free-form visual questions.
+6. **Dual camera clients** — Python (full RTSP + USB support) and Rust (USB only), sharing the same `camera.toml` config format.
+
+### Key Architecture Decisions
+
+- **Server-rendered templates** — Tera templates + vanilla JS. No npm/node/webpack. Templates are hot-reloadable without recompiling Rust.
+- **OpenAI-compatible VLM** — The server treats VLM as a generic HTTP API. Works with local Ollama, local vLLM, or remote cloud endpoints. No model loading in the server process.
+- **WebSocket for camera feeds** — Bidirectional: camera sends frames, server sends back inference results. Supports both JSON (base64 JPEG) and binary (raw JPEG) frame encoding.
+- **SSE for UI updates** — Dashboard receives live results without polling. Graceful reconnection on disconnect.
+
+For technical pitfalls behind these decisions, always consult **KNOWLEDGE.md** first.
+
+## Reference
+
+- **KNOWLEDGE.md** — Detailed technical pitfalls, learnings, and gotchas for Rust/Cargo, Axum, WebSocket protocol, VLM integration, and testing.
+- **server/config.toml.example** — Server configuration reference.
+- **camera/camera.toml.example** — Camera client configuration reference.
+
+## Spec & Plan Maintenance
+
+**If any spec or requirement changes, update CLAUDE.md to reflect the change.** This includes new features, modified behavior, removed functionality, API changes, or protocol changes. Treat the code as the final source of truth and keep docs synchronized with it.
+
+## Coding Rules
+
+### Server (Rust)
+
+- **No `unwrap()` in handlers** — Use `?` with proper error types or return `(StatusCode, String)` error tuples.
+- **Never hardcode the port** — Read from `config.toml`. Default to 3456 if not set.
+- **Never commit `config.toml` or API keys** — They are in `.gitignore`. Provide `config.toml.example` instead.
+- **Templates must be editable without recompilation** — All HTML/CSS/JS lives in `server/templates/` and `server/static/`. The Tera engine reloads templates on each request in dev.
+
+### Camera Client
+
+- **Shared config format** — Both Python and Rust clients must read the same `camera.toml` file. Do not add Python-only or Rust-only config keys without a documented fallback.
+- **Auto-reconnect** — Camera clients must handle server disconnections gracefully with backoff retry.
+
+For Rust/Cargo, Axum, and WebSocket-specific rules, see **KNOWLEDGE.md**.
+
+## Knowledge Management
+
+When you fix an important bug or discover a non-obvious technical pitfall, add the lesson to **KNOWLEDGE.md**. Focus on the *why* and *how* — not procedural instructions (those belong here). KNOWLEDGE.md should help future agents avoid repeating the same mistakes.
+
+## Development Workflow
+
+### Commit Policy
+
+All commits MUST pass the following checks before being pushed:
+
+```bash
+cd server
+
+# 1. Format check — zero diff
+cargo fmt --all -- --check
+
+# 2. Clippy — zero warnings (deny all warnings)
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 3. Build — zero warnings, zero errors
+RUSTFLAGS="-D warnings" cargo build --release
+
+# 4. Unit & integration tests
+cargo test
+
+# 5. E2E tests
+cargo test --test e2e_tests
+```
+
+If any of these fail, do NOT commit. Fix the issues first.
+
+### Commit Signing (DCO)
+
+All commits must be signed with:
+
+```
+Signed-off-by: Michael Yuan <michael@secondstate.io>
+```
+
+Use `-s` flag: `git commit -s -m "message"`
+
+Co-author line:
+
+```
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+```
+
+### Test Requirements
+
+- **Unit tests** (`tests/unit_tests.rs`) — Test monitor JSON parsing, profile definitions, config loading.
+- **Integration tests** (`tests/api_tests.rs`) — Start a real Axum server, test HTTP endpoints (cameras, results, snapshots, WebSocket register).
+- **E2E tests** (`tests/e2e_tests.rs`) — Simulated camera clients streaming frames via WebSocket, multi-camera concurrency, SSE events, disconnect cleanup.
+- **Real VLM tests** — Set `FLOOR_MONITOR_E2E_VLM=1` with `FLOOR_MONITOR_VLM_URL` and `FLOOR_MONITOR_VLM_MODEL` to test against a live VLM backend.
+
+### Project Structure
+
+```
+floor-monitor/
+├── server/                    # Rust/Axum WebSocket server
+│   ├── Cargo.toml
+│   ├── config.toml.example
+│   ├── src/
+│   │   ├── main.rs            # Entry point
+│   │   ├── lib.rs             # Public modules (for tests)
+│   │   ├── config.rs          # TOML config loading
+│   │   ├── state.rs           # Shared AppState, FrameResult, CameraState
+│   │   ├── vlm.rs             # VLM client (OpenAI + Ollama)
+│   │   ├── ws.rs              # WebSocket handler
+│   │   ├── routes.rs          # HTTP routes (dashboard, API, SSE)
+│   │   ├── monitor.rs         # Monitor profiles, JSON parsing
+│   │   └── telegram.rs        # Telegram bot
+│   ├── templates/             # Tera HTML templates
+│   │   ├── base.html
+│   │   └── dashboard.html
+│   ├── static/
+│   │   ├── css/style.css
+│   │   └── js/dashboard.js
+│   └── tests/
+│       ├── unit_tests.rs
+│       ├── api_tests.rs
+│       └── e2e_tests.rs
+├── camera/                    # Camera clients
+│   ├── camera.toml.example    # Shared config format
+│   ├── python/
+│   │   ├── camera_client.py
+│   │   └── requirements.txt
+│   └── rust/
+│       ├── Cargo.toml
+│       └── src/main.rs
+├── .github/workflows/ci.yml   # CI: fmt, clippy, build, test, e2e
+├── CLAUDE.md                  # This file
+├── KNOWLEDGE.md               # Technical pitfalls and learnings
+└── README.md                  # User-facing documentation
+```

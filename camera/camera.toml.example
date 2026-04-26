@@ -1,0 +1,26 @@
+# Camera client configuration
+# Both Python and Rust camera clients read this same file.
+
+[server]
+# WebSocket URL of the floor-monitor server
+ws_url = "ws://127.0.0.1:3456/ws"
+
+[camera]
+# Camera ID — unique identifier for this camera instance
+id = "cam-livingroom"
+# Human-readable name
+name = "Living Room Camera"
+
+# Source type: "local" (USB/built-in) or "rtsp" (network camera)
+source_type = "local"
+# For local cameras: device index (0, 1, 2, ...)
+device_index = 0
+# For RTSP cameras: full URL with credentials
+# rtsp_url = "rtsp://user:pass@192.168.1.10:554/stream1"
+
+# Frame capture interval in seconds
+interval = 2.0
+# Max dimension for resizing frames before sending (preserves aspect ratio)
+max_dimension = 768
+# JPEG quality (1-100)
+jpeg_quality = 85

@@ -1,14 +1,31 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Rust
+server/target/
+camera/rust/target/
+
+# Config files with credentials
 .env
 .env.*
 !.env.example
 cameras.json
 !cameras.json.example
+server/config.toml
+!server/config.toml.example
+camera/camera.toml
+!camera/camera.toml.example
+
+# OS
 .DS_Store
-*.egg-info/
-.ruff_cache/
-.mypy_cache/
-.pytest_cache/
+
+# Data
+data/
+uploads/

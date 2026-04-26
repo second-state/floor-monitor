@@ -1,0 +1,44 @@
+# Floor Monitor Server Configuration
+
+[server]
+host = "0.0.0.0"
+port = 3456
+
+# VLM / LLM inference backend
+# Supports any OpenAI-compatible API or Ollama native API.
+# The client auto-detects the format from the URL path:
+#   - URLs containing "/v1/" → OpenAI-compatible (vLLM, LiteLLM, OpenAI, etc.)
+#   - Other URLs → Ollama native format
+[vlm]
+
+# --- Option 1: Ollama (local, default) ---
+api_url = "http://localhost:11434/api/generate"
+model = "qwen2.5-vl:3b"
+
+# --- Option 2: vLLM (local or remote) ---
+# api_url = "http://localhost:8000/v1/chat/completions"
+# model = "Qwen/Qwen2.5-VL-3B-Instruct"
+
+# --- Option 3: OpenAI-compatible cloud endpoint ---
+# api_url = "https://api.openai.com/v1/chat/completions"
+# api_key = "sk-..."
+# model = "gpt-4o-mini"
+
+# --- Option 4: LiteLLM proxy ---
+# api_url = "http://localhost:4000/v1/chat/completions"
+# model = "ollama/qwen2.5-vl:3b"
+
+max_tokens = 200
+temperature = 0.1
+
+# Optional: Telegram bot for alerts and Q&A
+[telegram]
+# bot_token = "123456:ABC-DEF..."
+# chat_id = "12345678"
+
+# Monitor mode defaults
+[monitor]
+default_profile = "kid"
+summary_window_min = 30
+alert_consecutive = 2
+alert_cooldown_sec = 120

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Floor Monitor{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="panel panel-left">
+        <section class="camera-section">
+            <h2>Cameras</h2>
+            <div id="camera-list">
+                {% if cameras | length == 0 %}
+                <p class="muted">No cameras connected. Start a camera client to begin.</p>
+                {% else %}
+                {% for cam in cameras %}
+                <div class="camera-card {% if cam.running %}active{% endif %}" data-camera-id="{{ cam.camera_id }}">
+                    <div class="camera-header">
+                        <span class="status-dot {% if cam.running %}connected{% else %}disconnected{% endif %}"></span>
+                        <strong>{{ cam.name }}</strong>
+                        <span class="frame-count">Frame #{{ cam.frame_no }}</span>
+                    </div>
+                    <div class="camera-preview">
+                        {% if cam.running %}
+                        <img src="/api/snapshot/{{ cam.camera_id }}" alt="Camera preview"
+                             id="preview-{{ cam.camera_id }}" class="preview-img">
+                        {% else %}
+                        <div class="no-preview">Offline</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="info-section">
+            <h2>Server Info</h2>
+            <table class="info-table">
+                <tr><td>Model</td><td>{{ model }}</td></tr>
+                <tr><td>WebSocket</td><td><code>{{ ws_url }}</code></td></tr>
+                <tr>
+                    <td>Profiles</td>
+                    <td>
+                        {% for p in profiles %}
+                        <span class="tag">{{ p.name }}</span>
+                        {% endfor %}
+                    </td>
+                </tr>
+            </table>
+        </section>
+    </div>
+
+    <div class="panel panel-right">
+        <h2>Analysis Results</h2>
+        <div id="results-container">
+            {% if results | length == 0 %}
+            <p class="muted">Waiting for frames...</p>
+            {% else %}
+            {% for r in results %}
+            <div class="result-entry">
+                <div class="result-header">
+                    <strong>frame={{ r.frame_no }}</strong> |
+                    {{ r.time }} |
+                    infer={{ r.infer_secs | round(method="ceil", precision=2) }}s |
+                    model={{ r.model }} |
+                    camera={{ r.camera_id }}
+                </div>
+                <div class="result-text">{{ r.text }}</div>
+            </div>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

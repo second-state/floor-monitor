@@ -1,11 +1,13 @@
-# VLM Camera
+# Floor Monitor
 
-Local, real-time Vision-Language-Model analysis of any webcam or RTSP network
-camera, running fully on-device on Apple Silicon via
-[MLX-VLM](https://github.com/Blaizzy/mlx-vlm) (or on any OS via a local
-[Ollama](https://ollama.com) server). Includes an always-on Telegram bot that
-can answer free-form questions about the live feed or summarize any recent
-window on demand.
+Real-time camera monitoring with Vision-Language Model (VLM) analysis. Camera
+clients stream frames to a central server via WebSocket; the server runs VLM
+inference on each frame, serves a live web dashboard, and optionally pushes
+high-priority alerts and periodic summaries via Telegram.
+
+**Key design:** the server never touches cameras directly. It receives JPEG frames
+over WebSocket from one or more camera clients, which can run on the same machine
+or anywhere on the network.
 
 ## Screenshots
 
@@ -17,147 +19,221 @@ window on demand.
 
 ![Telegram bot](docs/telegram.jpg)
 
+## Architecture
+
+```
+┌─────────────────────────┐         ┌───────────────────────────────────┐
+│  Camera Client          │         │  Server (Rust / Axum)             │
+│  (Python or Rust)       │         │                                   │
+│                         │  WS     │  /ws       WebSocket handler      │
+│  USB / RTSP capture ────┼────────▶│  /dashboard  Web UI (Tera + SSE) │
+│  JPEG encode + send     │◀────────┤  /api/*    REST endpoints         │
+│  Receive results        │  Result │  VLM client  (OpenAI / Ollama)   │
+└─────────────────────────┘         │  Telegram bot (optional)          │
+                                    └───────────────────────────────────┘
+```
+
 ## Features
 
-- **Local inference.** Models are cached in `~/.cache/huggingface` after first
-  download; subsequent launches run fully offline.
-- **Backends.** MLX-VLM (Apple Silicon, fastest) or Ollama (any OS). Ollama VLM
-  models on `localhost:11434` are auto-detected.
-- **Cameras.** Built-in/USB webcams auto-probed; network cameras (Tapo,
-  Hikvision, Reolink, any RTSP source) configured via a local `cameras.json`.
-- **Monitor Mode.** Domain-specific profiles (Kid / Office / Retail / Home
-  Security) that emit structured JSON per frame, push high-priority alerts to
-  Telegram, and deliver periodic activity summaries.
-- **Telegram Q&A.** Send natural-language questions (ZH or EN) — a VLM-backed
-  intent classifier routes between _visual-current_ ("how many people?",
-  "is the floor clean?"), _history_ ("summarize the past 15 min"), and
-  _snapshot_ (returns the current frame as a photo).
-- **Thread-safe MLX.** All model calls are funneled through a single dedicated
-  worker thread so the capture loop and the Telegram listener never race on
-  Metal command buffers.
+- **Generic VLM/LLM backend** — Any OpenAI-compatible endpoint (vLLM, LiteLLM,
+  OpenAI) or Ollama native API. Auto-detected from the URL path in config.
+- **Monitor profiles** — Domain-specific structured JSON prompts: Kid, Office,
+  Retail Store, Home Security. Alerts on high-risk frames; periodic summaries.
+- **Web dashboard** — Live camera preview, streaming analysis results via SSE.
+  All HTML/CSS/JS in editable template files — no Rust recompile needed.
+- **Telegram bot** — `/snapshot`, `/status`, `/help`, and free-form visual
+  questions about the live feed.
+- **Dual camera clients** — Python (USB + RTSP) and Rust (USB only), sharing
+  the same `camera.toml` config format.
+- **Multi-camera** — Multiple camera clients can connect to a single server
+  simultaneously.
 
 ## Quick Start
 
 ### Requirements
 
-- macOS on Apple Silicon (for MLX backend) — or any OS with a local Ollama
-  server running a VLM model (LLaVA, Qwen2.5-VL, MiniCPM-V, Gemma 3, …)
-- Python 3.11+
-- A webcam or an RTSP-capable IP camera
+- Rust 1.75+ (for the server)
+- Python 3.11+ (for the Python camera client)
+- A VLM backend: [Ollama](https://ollama.com) with a vision model, or any
+  OpenAI-compatible endpoint (vLLM, LiteLLM, etc.)
 
-### Install
-
-```bash
-git clone https://github.com/Drlucaslu/vlm-camera.git
-cd vlm-camera
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
-```
-
-### Configure (optional but recommended)
+### 1. Start a VLM backend
 
 ```bash
-cp .env.example .env                     # Telegram token + chat ID
-cp cameras.json.example cameras.json     # one entry per network camera
+# Option A: Ollama (easiest)
+ollama pull qwen2.5-vl:3b
+ollama serve
+
+# Option B: vLLM
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct
 ```
 
-Edit `.env`:
-
-```ini
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF…
-TELEGRAM_CHAT_ID=12345678
-```
-
-Edit `cameras.json` — any number of entries, any brand:
-
-```json
-[
-  { "name": "Tapo Living Room (HD)",
-    "url": "rtsp://USER:PASS@192.168.1.10:554/stream1" },
-  { "name": "Hikvision Garage",
-    "url": "rtsp://USER:PASS@192.168.1.20:554/Streaming/Channels/101" }
-]
-```
-
-Both files are gitignored — credentials never leave the machine.
-
-### Run
+### 2. Build and start the server
 
 ```bash
-./start.sh
+cd server
+cp config.toml.example config.toml
+# Edit config.toml — set your VLM endpoint, Telegram tokens, etc.
+
+cargo build --release
+./target/release/floor-monitor-server
 ```
 
-Open <http://127.0.0.1:7860>.
+The server starts on `http://0.0.0.0:3456` by default.
 
-## Usage
+### 3. Start a camera client
 
-### Web UI
+**Python (recommended — supports USB and RTSP cameras):**
 
-1. Pick a **Model** and a **Camera** (local index or one of your `cameras.json`
-   entries, or "Network Camera (custom RTSP URL)" to paste a URL live).
-2. Choose a **Preset** prompt (Person Action / Scene / Object / Custom) and an
-   **Interval** (how often to run inference).
-3. Optionally expand **Monitor Mode** to enable a profile that emits
-   structured JSON, sends alerts, and posts periodic summaries.
-4. Hit **Start**. Results stream on the right; the preview stays live.
+```bash
+cd camera
+cp camera.toml.example camera.toml
+# Edit camera.toml — set camera source and server URL
 
-### Telegram
+cd python
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python camera_client.py
+```
 
-Send any of the following to your bot:
+**Rust (USB cameras only):**
 
-| Message | What happens |
-|---|---|
-| `房间里有几个人？` / `how many people?` | VLM runs on the latest frame with your question as the prompt |
-| `地面干净吗？` / `is the floor clean?` | Same — free-form visual question |
-| `过去 15 分钟怎么样？` / `summary last hour` | Text-only VLM summarizes the recent capture-loop results |
-| `截图` / `/snapshot` | Returns the current frame as a photo |
-| `/help` · `/status` | Help + running state |
+```bash
+cd camera/rust
+cargo build --release
+./target/release/floor-monitor-camera ../camera.toml
+```
 
-Only messages from the configured `TELEGRAM_CHAT_ID` are answered; others are
-dropped.
+### 4. Open the dashboard
 
-## Configuration Reference
+Browse to [http://127.0.0.1:3456/dashboard](http://127.0.0.1:3456/dashboard).
+Analysis results stream in real-time as the camera client sends frames.
 
-### `cameras.json`
+## Configuration
 
-A JSON list of `{ "name": ..., "url": ... }`. Each URL embeds its own
-credentials and may use any scheme OpenCV/FFmpeg understands (`rtsp://`,
-`http://`, `https://`). The file is loaded at startup; restart the app after
-editing.
+### Server (`server/config.toml`)
 
-For Tapo, set up a **Camera Account** in the Tapo app (Advanced Settings →
-Camera Account) and enable RTSP/ONVIF, then use
-`rtsp://USER:PASS@HOST:554/stream1` (HD) or `/stream2` (SD).
+```toml
+[server]
+host = "0.0.0.0"
+port = 3456
 
-### `.env`
+[vlm]
+# Ollama
+api_url = "http://localhost:11434/api/generate"
+model = "qwen2.5-vl:3b"
 
-| Variable | Required? | Purpose |
+# Or vLLM / OpenAI-compatible
+# api_url = "http://localhost:8000/v1/chat/completions"
+# api_key = "sk-..."
+# model = "Qwen/Qwen2.5-VL-3B-Instruct"
+
+max_tokens = 200
+temperature = 0.1
+
+[telegram]
+# bot_token = "123456:ABC-DEF..."
+# chat_id = "12345678"
+
+[monitor]
+default_profile = "kid"        # kid | office | retail | security
+summary_window_min = 30
+alert_consecutive = 2
+alert_cooldown_sec = 120
+```
+
+The VLM client auto-detects the API format: URLs containing `/v1/` use
+OpenAI-compatible format; other URLs use Ollama native format.
+
+### Camera (`camera/camera.toml`)
+
+```toml
+[server]
+ws_url = "ws://127.0.0.1:3456/ws"
+
+[camera]
+id = "cam-livingroom"
+name = "Living Room Camera"
+source_type = "local"       # "local" or "rtsp"
+device_index = 0            # for local cameras
+# rtsp_url = "rtsp://user:pass@192.168.1.10:554/stream1"  # for RTSP
+interval = 2.0
+max_dimension = 768
+jpeg_quality = 85
+```
+
+Both Python and Rust camera clients read this same file.
+
+## API Reference
+
+| Endpoint | Method | Description |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | Optional | Enables push notifications + the incoming listener |
-| `TELEGRAM_CHAT_ID` | Optional | Locks the bot to one chat (your user ID) |
-| `OLLAMA_BASE_URL` | Optional | Defaults to `http://localhost:11434` |
-| `GRADIO_SERVER_PORT` | Optional | Defaults to `7860` |
+| `/dashboard` | GET | Web UI dashboard |
+| `/ws` | WebSocket | Camera client connection |
+| `/api/cameras` | GET | JSON list of connected cameras |
+| `/api/results` | GET | Recent analysis results (all cameras) |
+| `/api/snapshot/{camera_id}` | GET | Latest JPEG frame for a camera |
+| `/api/events` | GET (SSE) | Server-Sent Events stream for live updates |
 
-## Architecture
+### WebSocket Protocol
 
-- **`app.py`** — Gradio UI, capture loop, VLM orchestration.
-- **`listener.py`** — Telegram long-polling listener + intent classifier.
-- **`monitor.py`** — Scene-profile definitions, structured-output parser,
-  activity log, alert manager, and periodic summary scheduler.
-- **`notify.py`** — Telegram send-only helpers (stdlib `urllib` only).
+**Camera → Server:**
+```json
+{"type": "register", "camera_id": "cam1", "name": "Living Room"}
+{"type": "frame", "camera_id": "cam1", "jpeg_b64": "<base64>"}
+```
+Or send raw JPEG as a binary WebSocket message (after registration).
 
-All MLX operations (model load, inference, unload) are funneled through a
-single `vlm-worker` thread. This is load-bearing: MLX arrays and Metal command
-buffers are bound to the thread that allocated them, so a naive "just add a
-lock" approach crashes with `failed assertion 'A command encoder is already
-encoding to this command buffer'` once a second thread (e.g. the Telegram
-listener) starts issuing inference requests.
+**Server → Camera:**
+```json
+{"type": "registered", "camera_id": "cam1"}
+{"type": "result", "camera_id": "cam1", "frame_no": 42, "text": "...", "infer_secs": 1.23}
+```
 
-## Status
+## Monitor Profiles
 
-Hobby project, built iteratively with [Claude Code](https://claude.com/claude-code).
-No tests, no versioning. Use at your own risk, especially if you point it at a
-camera that sees people who haven't agreed to be analyzed.
+| Profile | Focus | Alert Examples |
+|---|---|---|
+| **Kid Monitor** | Child safety | Roughhousing, climbing, near windows, playing with outlets/sharp objects |
+| **Office Monitor** | Workplace safety | Injury, conflict, fire/smoke, intruders |
+| **Retail Store** | Operations | Unattended customers, staff negligence, cleanliness, conflicts |
+| **Home Security** | Intrusion/safety | Strangers, forced entry, fire, glass breakage |
+
+Each profile instructs the VLM to output structured JSON with `activity`,
+`risk_level`, and `risk_reason` fields. High-risk detections trigger Telegram
+alerts after N consecutive frames (configurable).
+
+## Development
+
+### Run tests
+
+```bash
+cd server
+cargo test                          # all tests
+cargo test --test e2e_tests         # e2e only
+```
+
+### CI
+
+GitHub Actions runs on ARM Linux (`ubuntu-24.04-arm`):
+1. `cargo fmt --check`
+2. `cargo clippy -- -D warnings`
+3. `cargo build --release`
+4. `cargo test`
+5. `cargo test --test e2e_tests`
+
+### Project structure
+
+See [CLAUDE.md](CLAUDE.md) for the full directory layout and development guidelines.
+
+## Prior Art
+
+This project is a restructured version of
+[VLM Camera](https://github.com/Drlucaslu/vlm-camera), originally a monolithic
+Python + Gradio application. The restructuring separates the camera capture
+(client) from the analysis server, replaces Gradio with a Rust/Axum web server
+with editable templates, and makes the VLM backend configurable via standard
+OpenAI-compatible APIs.
 
 ## License
 

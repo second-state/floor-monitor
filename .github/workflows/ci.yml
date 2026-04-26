@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # --- Server checks (Rust) ---
+  fmt:
+    name: Format check
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --manifest-path server/Cargo.toml -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - run: cargo clippy --all-targets --all-features --manifest-path server/Cargo.toml -- -D warnings
+
+  build:
+    name: Build
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - run: cargo build --release --manifest-path server/Cargo.toml
+
+  test:
+    name: Unit & integration tests
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - name: Run tests
+        working-directory: server
+        run: cargo test -- --nocapture
+
+  e2e:
+    name: E2E tests
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - name: Run e2e tests
+        working-directory: server
+        run: |
+          cargo test --test e2e_tests -- --nocapture
+      # Optional: run with real VLM (uncomment when Ollama is available in CI)
+      # - name: Install Ollama
+      #   run: curl -fsSL https://ollama.com/install.sh | sh
+      # - name: Pull test model
+      #   run: ollama pull qwen2.5-vl:3b
+      # - name: Run real VLM e2e
+      #   working-directory: server
+      #   env:
+      #     FLOOR_MONITOR_E2E_VLM: "1"
+      #     FLOOR_MONITOR_VLM_URL: "http://localhost:11434/api/generate"
+      #     FLOOR_MONITOR_VLM_MODEL: "qwen2.5-vl:3b"
+      #   run: cargo test --test e2e_tests test_e2e_real_vlm_inference -- --nocapture
+
+  # --- Python camera client checks ---
+  python-lint:
+    name: Python lint
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install ruff
+      - name: Lint
+        run: ruff check camera/python/
