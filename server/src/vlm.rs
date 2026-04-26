@@ -1,12 +1,14 @@
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn};
 
 use crate::config::VlmConfig;
 
-/// VLM client using OpenAI-compatible chat completions API.
-/// Works with any endpoint that supports the OpenAI vision format:
-/// vLLM, Ollama (/v1/chat/completions), OpenAI, etc.
+/// VLM client using OpenAI-compatible API.
+/// Supports both the Chat Completions format (image_url/text) and the
+/// newer Responses format (input_image/input_text). Tries the newer
+/// format first; auto-falls back to the legacy format on 400 errors.
 pub struct VlmClient {
     api_url: String,
     api_key: Option<String>,
@@ -14,35 +16,9 @@ pub struct VlmClient {
     max_tokens: u32,
     temperature: Option<f32>,
     http: reqwest::Client,
-}
-
-#[derive(Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-}
-
-#[derive(Serialize)]
-struct ChatMessage {
-    role: String,
-    content: Vec<ContentPart>,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-enum ContentPart {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "image_url")]
-    ImageUrl { image_url: ImageUrl },
-}
-
-#[derive(Serialize)]
-struct ImageUrl {
-    url: String,
+    /// When true, use legacy "image_url"/"text" content types.
+    /// Starts false (use newer format); flips on first 400 error.
+    use_legacy_format: AtomicBool,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +46,7 @@ impl VlmClient {
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             http: reqwest::Client::new(),
+            use_legacy_format: AtomicBool::new(false),
         }
     }
 
@@ -83,67 +60,49 @@ impl VlmClient {
         let img_b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_bytes);
         let data_url = format!("data:image/jpeg;base64,{}", img_b64);
 
-        let payload = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![ChatMessage {
-                role: "user".to_string(),
-                content: vec![
-                    ContentPart::ImageUrl {
-                        image_url: ImageUrl { url: data_url },
-                    },
-                    ContentPart::Text {
-                        text: prompt.to_string(),
-                    },
-                ],
-            }],
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
-        };
+        // Try current format; on 400 error, flip and retry with the other format
+        let use_legacy = self.use_legacy_format.load(Ordering::Relaxed);
+        let payload = self.build_payload(&data_url, prompt, use_legacy);
 
         let start = std::time::Instant::now();
-        let mut req = self
-            .http
-            .post(&self.api_url)
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(120));
+        let result = self.send_request(&payload).await;
 
-        if let Some(ref key) = self.api_key {
-            if !key.is_empty() {
-                req = req.bearer_auth(key);
+        match result {
+            Ok(text) => {
+                let elapsed = start.elapsed().as_secs_f64();
+                info!(
+                    "VLM inference done in {:.2}s: {}",
+                    elapsed,
+                    &text[..text.len().min(80)]
+                );
+                Ok((text, elapsed))
             }
-        }
-
-        let resp = req.send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let truncated: String = body.chars().take(300).collect();
-            warn!("VLM API error {}: {}", status, truncated);
-            return Err(format!("VLM API returned {status}").into());
-        }
-
-        let raw_text = resp.text().await.unwrap_or_default();
-        let body: ChatResponse = match serde_json::from_str(&raw_text) {
-            Ok(b) => b,
             Err(e) => {
-                let truncated: String = raw_text.chars().take(200).collect();
-                warn!("VLM returned invalid JSON: {} — body: {}", e, truncated);
-                return Err(format!("VLM returned invalid JSON: {}", e).into());
+                let err_msg = e.to_string();
+                // If we got a 400 with "Invalid value: 'image_url'" or "'input_image'",
+                // flip the format flag and retry once
+                if err_msg.contains("400")
+                    && (err_msg.contains("image_url")
+                        || err_msg.contains("input_image")
+                        || err_msg.contains("input_text"))
+                {
+                    let new_legacy = !use_legacy;
+                    self.use_legacy_format.store(new_legacy, Ordering::Relaxed);
+                    info!("VLM format auto-switch: legacy={}. Retrying...", new_legacy);
+                    let payload = self.build_payload(&data_url, prompt, new_legacy);
+                    let text = self.send_request(&payload).await?;
+                    let elapsed = start.elapsed().as_secs_f64();
+                    info!(
+                        "VLM inference done in {:.2}s (after format switch): {}",
+                        elapsed,
+                        &text[..text.len().min(80)]
+                    );
+                    Ok((text, elapsed))
+                } else {
+                    Err(e)
+                }
             }
-        };
-        let elapsed = start.elapsed().as_secs_f64();
-        let text = body
-            .choices
-            .first()
-            .map(|c| c.message.content.trim().to_string())
-            .unwrap_or_default();
-
-        info!(
-            "VLM inference done in {:.2}s: {}",
-            elapsed,
-            &text[..text.len().min(80)]
-        );
-        Ok((text, elapsed))
+        }
     }
 
     /// Text-only inference using a tiny placeholder image.
@@ -158,6 +117,95 @@ impl VlmClient {
 
     pub fn model_name(&self) -> &str {
         &self.model
+    }
+
+    /// Build the JSON payload. Two formats:
+    /// - Newer (Responses API): input_image + input_text
+    /// - Legacy (Chat Completions): image_url + text
+    fn build_payload(&self, data_url: &str, prompt: &str, use_legacy: bool) -> serde_json::Value {
+        let content = if use_legacy {
+            // Legacy Chat Completions format
+            serde_json::json!([
+                {
+                    "type": "image_url",
+                    "image_url": { "url": data_url }
+                },
+                {
+                    "type": "text",
+                    "text": prompt
+                }
+            ])
+        } else {
+            // Newer Responses API format (GPT-5.x)
+            serde_json::json!([
+                {
+                    "type": "input_image",
+                    "image_url": data_url
+                },
+                {
+                    "type": "input_text",
+                    "text": prompt
+                }
+            ])
+        };
+
+        let mut payload = serde_json::json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": content
+            }],
+            "max_tokens": self.max_tokens,
+        });
+
+        if let Some(temp) = self.temperature {
+            payload["temperature"] = serde_json::json!(temp);
+        }
+
+        payload
+    }
+
+    /// Send request and parse response.
+    async fn send_request(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let mut req = self
+            .http
+            .post(&self.api_url)
+            .json(payload)
+            .timeout(std::time::Duration::from_secs(120));
+
+        if let Some(ref key) = self.api_key {
+            if !key.is_empty() {
+                req = req.bearer_auth(key);
+            }
+        }
+
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let truncated: String = body.chars().take(300).collect();
+            warn!("VLM API error {}: {}", status, truncated);
+            return Err(format!("VLM API returned {status}: {truncated}").into());
+        }
+
+        let raw_text = resp.text().await.unwrap_or_default();
+        let body: ChatResponse = match serde_json::from_str(&raw_text) {
+            Ok(b) => b,
+            Err(e) => {
+                let truncated: String = raw_text.chars().take(200).collect();
+                warn!("VLM returned invalid JSON: {} — body: {}", e, truncated);
+                return Err(format!("VLM returned invalid JSON: {}", e).into());
+            }
+        };
+
+        Ok(body
+            .choices
+            .first()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_default())
     }
 }
 
@@ -188,6 +236,10 @@ impl std::fmt::Debug for VlmClient {
         f.debug_struct("VlmClient")
             .field("api_url", &self.api_url)
             .field("model", &self.model)
+            .field(
+                "use_legacy_format",
+                &self.use_legacy_format.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
