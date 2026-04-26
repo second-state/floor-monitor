@@ -47,7 +47,7 @@ fn test_state() -> Arc<floor_monitor_server::state::AppState> {
             model: std::env::var("FLOOR_MONITOR_VLM_MODEL")
                 .unwrap_or_else(|_| "test-model".to_string()),
             max_tokens: 100,
-            temperature: 0.1,
+            temperature: None,
         },
         telegram: Default::default(),
         monitor: Default::default(),

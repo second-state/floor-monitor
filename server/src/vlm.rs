@@ -12,7 +12,7 @@ pub struct VlmClient {
     api_key: Option<String>,
     model: String,
     max_tokens: u32,
-    temperature: f32,
+    temperature: Option<f32>,
     http: reqwest::Client,
 }
 
@@ -21,7 +21,8 @@ struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     max_tokens: u32,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -116,11 +117,20 @@ impl VlmClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            warn!("VLM API error {}: {}", status, &body[..body.len().min(300)]);
+            let truncated: String = body.chars().take(300).collect();
+            warn!("VLM API error {}: {}", status, truncated);
             return Err(format!("VLM API returned {status}").into());
         }
 
-        let body: ChatResponse = resp.json().await?;
+        let raw_text = resp.text().await.unwrap_or_default();
+        let body: ChatResponse = match serde_json::from_str(&raw_text) {
+            Ok(b) => b,
+            Err(e) => {
+                let truncated: String = raw_text.chars().take(200).collect();
+                warn!("VLM returned invalid JSON: {} — body: {}", e, truncated);
+                return Err(format!("VLM returned invalid JSON: {}", e).into());
+            }
+        };
         let elapsed = start.elapsed().as_secs_f64();
         let text = body
             .choices

@@ -19,7 +19,7 @@ fn test_state() -> Arc<floor_monitor_server::state::AppState> {
             api_key: None,
             model: "test-model".to_string(),
             max_tokens: 100,
-            temperature: 0.1,
+            temperature: None,
         },
         telegram: Default::default(),
         monitor: Default::default(),

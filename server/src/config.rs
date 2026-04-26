@@ -33,8 +33,7 @@ pub struct VlmConfig {
     pub model: String,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
-    #[serde(default = "default_temperature")]
-    pub temperature: f32,
+    pub temperature: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -84,8 +83,7 @@ pub struct LlmConfig {
     pub model: String,
     #[serde(default = "default_llm_max_tokens")]
     pub max_tokens: u32,
-    #[serde(default = "default_llm_temperature")]
-    pub temperature: f32,
+    pub temperature: Option<f32>,
 }
 
 fn default_asr_model() -> String {
@@ -97,10 +95,6 @@ fn default_llm_model() -> String {
 fn default_llm_max_tokens() -> u32 {
     150
 }
-fn default_llm_temperature() -> f32 {
-    0.0
-}
-
 fn default_host() -> String {
     "0.0.0.0".to_string()
 }
@@ -112,9 +106,6 @@ fn default_model() -> String {
 }
 fn default_max_tokens() -> u32 {
     200
-}
-fn default_temperature() -> f32 {
-    0.1
 }
 fn default_profile() -> String {
     "kid".to_string()

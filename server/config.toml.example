@@ -25,7 +25,7 @@ model = "Qwen/Qwen2.5-VL-3B-Instruct"
 # model = "gpt-4o-mini"
 
 max_tokens = 200
-temperature = 0.1
+# temperature = 0.1  # optional; omit to use provider default
 
 # Optional: Telegram bot for alerts and Q&A
 [telegram]
@@ -50,7 +50,7 @@ temperature = 0.1
 # api_key = "sk-..."
 # model = "Qwen/Qwen2.5-3B-Instruct"
 # max_tokens = 150
-# temperature = 0.0
+# temperature = 0.0  # optional; omit to use provider default
 
 # Monitor mode defaults
 [monitor]

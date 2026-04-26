@@ -110,7 +110,7 @@ fn test_config_openai_format_detection() {
         api_key: None,
         model: "test".to_string(),
         max_tokens: 100,
-        temperature: 0.1,
+        temperature: None,
     };
     let client = floor_monitor_server::vlm::VlmClient::new(&cfg);
     assert_eq!(client.model_name(), "test");
@@ -123,7 +123,7 @@ fn test_config_vlm_client_creation() {
         api_key: Some("test-key".to_string()),
         model: "Qwen/Qwen2.5-VL-3B-Instruct".to_string(),
         max_tokens: 200,
-        temperature: 0.1,
+        temperature: None,
     };
     let client = floor_monitor_server::vlm::VlmClient::new(&cfg);
     assert_eq!(client.model_name(), "Qwen/Qwen2.5-VL-3B-Instruct");

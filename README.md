@@ -64,7 +64,7 @@ Edit `config.toml` — point `[vlm]` at your OpenAI-compatible endpoint:
 api_url = "http://localhost:8000/v1/chat/completions"
 model = "Qwen/Qwen2.5-VL-3B-Instruct"
 max_tokens = 200
-temperature = 0.1
+# temperature = 0.1  # optional; omit to use provider default
 ```
 
 Build and run:
@@ -118,7 +118,7 @@ api_url = "http://localhost:8000/v1/chat/completions"
 model = "Qwen/Qwen2.5-VL-3B-Instruct"
 # api_key = "sk-..."   # if your endpoint requires authentication
 max_tokens = 200
-temperature = 0.1
+# temperature = 0.1  # optional; omit to use provider default
 
 [telegram]
 # bot_token = "123456:ABC-DEF..."
