@@ -131,6 +131,7 @@ temperature = 0.1
 
 # [llm]  # for intent classification (without this, keyword matching is used)
 # api_url = "http://localhost:8000/v1/chat/completions"
+# api_key = "sk-..."
 # model = "Qwen/Qwen2.5-3B-Instruct"
 
 [monitor]
