@@ -24,18 +24,18 @@ camera/ (Python or Rust)          server/ (Rust/Axum)
 
 ### Core Features
 
-1. **WebSocket camera feed** — Camera clients register, stream JPEG frames; server processes and returns results.
-2. **Generic VLM/LLM backend** — Supports any OpenAI-compatible endpoint (vLLM, LiteLLM, OpenAI) or Ollama native API. Auto-detected from URL path.
+1. **WebSocket camera feed** — Camera clients register, stream JPEG frames; server processes and returns results. Server can also send commands (PTZ, patrol) back to camera clients.
+2. **Generic VLM/LLM backend** — Supports any OpenAI-compatible endpoint (vLLM, OpenAI) or Ollama native API. Auto-detected from URL path. Separate `[vlm]` (vision) and `[llm]` (text/intent) configuration.
 3. **Web dashboard** — Live camera preview, analysis results via SSE, camera status. All HTML/CSS/JS in editable template files.
-4. **Monitor profiles** — Domain-specific structured JSON prompts (Kid / Office / Retail / Home Security) with alert and summary pipelines.
-5. **Telegram bot** — Slash commands (`/snapshot`, `/status`, `/help`) and free-form visual questions.
-6. **Dual camera clients** — Python (full RTSP + USB support) and Rust (USB only), sharing the same `camera.toml` config format.
+4. **Monitor profiles** — Domain-specific structured JSON prompts (Kid / Office / Retail / Home Security) with alert pipeline (consecutive high-risk → Telegram notification) and periodic summary scheduler.
+5. **Telegram bot** — Text and voice messages. Voice messages transcribed via ASR (Whisper-compatible API). LLM-based intent classification routes to: visual question, snapshot, patrol, PTZ control, history summary, help, status.
+6. **Dual camera clients** — Python (full RTSP + USB support) and Rust (USB only), sharing the same `camera.toml` config format. Both handle server commands (PTZ, patrol).
 
 ### Key Architecture Decisions
 
 - **Server-rendered templates** — Tera templates + vanilla JS. No npm/node/webpack. Templates are hot-reloadable without recompiling Rust.
 - **OpenAI-compatible VLM** — The server treats VLM as a generic HTTP API. Works with local Ollama, local vLLM, or remote cloud endpoints. No model loading in the server process.
-- **WebSocket for camera feeds** — Bidirectional: camera sends frames, server sends back inference results. Supports both JSON (base64 JPEG) and binary (raw JPEG) frame encoding.
+- **WebSocket for camera feeds** — Bidirectional: camera sends frames, server sends back inference results and commands. Supports JSON (base64 JPEG) and binary (raw JPEG) frame encoding. Server→camera command channel enables PTZ control and patrol from Telegram.
 - **SSE for UI updates** — Dashboard receives live results without polling. Graceful reconnection on disconnect.
 
 For technical pitfalls behind these decisions, always consult **KNOWLEDGE.md** first.
@@ -133,10 +133,13 @@ floor-monitor/
 │   │   ├── config.rs          # TOML config loading
 │   │   ├── state.rs           # Shared AppState, FrameResult, CameraState
 │   │   ├── vlm.rs             # VLM client (OpenAI + Ollama)
-│   │   ├── ws.rs              # WebSocket handler
+│   │   ├── llm.rs             # LLM intent classifier
+│   │   ├── asr.rs             # ASR client (Whisper-compatible)
+│   │   ├── alert.rs           # Alert tracker + pipeline
+│   │   ├── ws.rs              # WebSocket handler + command channel
 │   │   ├── routes.rs          # HTTP routes (dashboard, API, SSE)
 │   │   ├── monitor.rs         # Monitor profiles, JSON parsing
-│   │   └── telegram.rs        # Telegram bot
+│   │   └── telegram.rs        # Telegram bot (text + voice)
 │   ├── templates/             # Tera HTML templates
 │   │   ├── base.html
 │   │   └── dashboard.html

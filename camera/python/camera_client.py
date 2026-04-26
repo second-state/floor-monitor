@@ -90,6 +90,41 @@ def encode_jpeg(img: Image.Image, quality: int = 85) -> bytes:
     return buf.getvalue()
 
 
+def handle_command(websocket, data: dict, camera_id: str):
+    """Handle a command message from the server."""
+    action = data.get("action", "")
+    params = data.get("params", {})
+    log.info("Received command: action=%s params=%s", action, params)
+
+    success = True
+    message = "OK"
+
+    if action == "ptz":
+        direction = params.get("direction", "")
+        log.info("PTZ command: %s (not implemented in this client)", direction)
+        message = f"PTZ {direction} acknowledged (no PTZ hardware)"
+    elif action == "patrol":
+        log.info("Patrol command (not implemented in this client)")
+        message = "Patrol acknowledged (no PTZ hardware)"
+    else:
+        log.warning("Unknown command action: %s", action)
+        success = False
+        message = f"Unknown action: {action}"
+
+    # Send acknowledgment
+    ack = json.dumps({
+        "type": "command_ack",
+        "camera_id": camera_id,
+        "action": action,
+        "success": success,
+        "message": message,
+    })
+    try:
+        websocket.send(ack)
+    except Exception as e:
+        log.warning("Failed to send command ack: %s", e)
+
+
 def run(config_path: str):
     """Main loop: connect to server, stream frames."""
     cfg = load_config(config_path)
@@ -152,8 +187,20 @@ def run(config_path: str):
                                 data.get("infer_secs", 0),
                                 (data.get("text", ""))[:80],
                             )
+                        elif data.get("type") == "command":
+                            handle_command(websocket, data, camera_id)
                     except Exception as e:
                         log.warning("No response for frame %d: %s", frame_no, e)
+
+                    # Check for any pending command messages
+                    try:
+                        while True:
+                            extra = websocket.recv(timeout=0.01)
+                            extra_data = json.loads(extra)
+                            if extra_data.get("type") == "command":
+                                handle_command(websocket, extra_data, camera_id)
+                    except Exception:
+                        pass  # no more pending messages
 
                     # Wait for remaining interval
                     elapsed = time.time() - t0

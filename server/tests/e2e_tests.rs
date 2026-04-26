@@ -51,8 +51,11 @@ fn test_state() -> Arc<floor_monitor_server::state::AppState> {
         },
         telegram: Default::default(),
         monitor: Default::default(),
+        asr: Default::default(),
+        llm: Default::default(),
     };
-    Arc::new(floor_monitor_server::state::AppState::new(config))
+    let (state, _alert_rx) = floor_monitor_server::state::AppState::new(config);
+    Arc::new(state)
 }
 
 fn test_app(state: Arc<floor_monitor_server::state::AppState>) -> axum::Router {
@@ -368,4 +371,64 @@ async fn test_e2e_binary_frame_protocol() {
     let cameras = _state.cameras.read().await;
     let cam = cameras.get("bin-cam").expect("Camera should exist");
     assert!(cam.latest_frame.is_some());
+}
+
+/// Test server→camera command delivery via WebSocket.
+#[tokio::test]
+async fn test_e2e_camera_receives_command() {
+    let (base_url, state) = start_server().await;
+    let ws_url = base_url.replace("http://", "ws://") + "/ws";
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+
+    // Register
+    let register = serde_json::json!({
+        "type": "register",
+        "camera_id": "cmd-cam",
+        "name": "Command Test",
+    });
+    ws.send(Message::Text(register.to_string().into()))
+        .await
+        .unwrap();
+    let _ack = ws.next().await.unwrap().unwrap();
+
+    // Small delay to let cmd_tx be stored
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Send a command from the server side
+    let result = floor_monitor_server::ws::send_camera_command(
+        &state,
+        "cmd-cam",
+        "ptz",
+        serde_json::json!({"direction": "pan_left"}),
+    )
+    .await;
+    assert!(result.is_ok(), "send_camera_command should succeed");
+
+    // Camera should receive the command
+    match tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) => {
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(v["type"], "command");
+            assert_eq!(v["action"], "ptz");
+            assert_eq!(v["params"]["direction"], "pan_left");
+        }
+        other => panic!("Expected command message, got: {:?}", other),
+    }
+}
+
+/// Test that sending a command to a disconnected camera returns an error.
+#[tokio::test]
+async fn test_e2e_command_to_nonexistent_camera() {
+    let (_base_url, state) = start_server().await;
+
+    let result = floor_monitor_server::ws::send_camera_command(
+        &state,
+        "no-such-cam",
+        "ptz",
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("not found"));
 }

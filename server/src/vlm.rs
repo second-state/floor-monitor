@@ -7,7 +7,7 @@ use crate::config::VlmConfig;
 /// API format auto-detected from the URL path.
 #[derive(Debug, Clone, PartialEq)]
 enum ApiFormat {
-    /// OpenAI-compatible /v1/chat/completions (works with vLLM, LiteLLM, OpenAI, etc.)
+    /// OpenAI-compatible /v1/chat/completions (works with vLLM, OpenAI, etc.)
     OpenAI,
     /// Ollama native /api/generate
     Ollama,

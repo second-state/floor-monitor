@@ -23,8 +23,11 @@ fn test_state() -> Arc<floor_monitor_server::state::AppState> {
         },
         telegram: Default::default(),
         monitor: Default::default(),
+        asr: Default::default(),
+        llm: Default::default(),
     };
-    Arc::new(floor_monitor_server::state::AppState::new(config))
+    let (state, _alert_rx) = floor_monitor_server::state::AppState::new(config);
+    Arc::new(state)
 }
 
 /// Build the Axum app (same as main.rs but without Telegram).

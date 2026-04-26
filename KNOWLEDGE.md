@@ -41,7 +41,7 @@ When a WebSocket disconnects, the server marks the camera as `running: false` bu
 ### Dual API Format Support
 
 The VLM client auto-detects the API format from the URL:
-- URLs containing `/v1/` → OpenAI-compatible format (works with vLLM, LiteLLM, OpenAI, etc.)
+- URLs containing `/v1/` → OpenAI-compatible format (works with vLLM, OpenAI, etc.)
 - Other URLs → Ollama native format
 
 This detection happens once at startup based on the config. If you need to switch backends, change the `api_url` in `config.toml`.

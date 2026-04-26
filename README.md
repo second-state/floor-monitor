@@ -35,8 +35,8 @@ or anywhere on the network.
 
 ## Features
 
-- **Generic VLM/LLM backend** — Any OpenAI-compatible endpoint (vLLM, LiteLLM,
-  OpenAI) or Ollama native API. Auto-detected from the URL path in config.
+- **Generic VLM/LLM backend** — Any OpenAI-compatible endpoint (vLLM, OpenAI)
+  or Ollama native API. Auto-detected from the URL path in config.
 - **Monitor profiles** — Domain-specific structured JSON prompts: Kid, Office,
   Retail Store, Home Security. Alerts on high-risk frames; periodic summaries.
 - **Web dashboard** — Live camera preview, streaming analysis results via SSE.
@@ -55,7 +55,7 @@ or anywhere on the network.
 - Rust 1.75+ (for the server)
 - Python 3.11+ (for the Python camera client)
 - A VLM backend: [Ollama](https://ollama.com) with a vision model, or any
-  OpenAI-compatible endpoint (vLLM, LiteLLM, etc.)
+  OpenAI-compatible endpoint (vLLM, OpenAI, etc.)
 
 ### 1. Start a VLM backend
 

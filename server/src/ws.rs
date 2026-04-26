@@ -8,6 +8,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::state::{AppState, CameraState, FrameResult};
@@ -24,22 +25,26 @@ pub async fn ws_handler(
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum CameraMessage {
-    /// Camera registers itself with an ID and name.
     #[serde(rename = "register")]
     Register { camera_id: String, name: String },
-    /// Camera sends a JPEG frame (base64-encoded).
     #[serde(rename = "frame")]
     Frame { camera_id: String, jpeg_b64: String },
+    #[serde(rename = "command_ack")]
+    CommandAck {
+        camera_id: String,
+        action: String,
+        success: bool,
+        #[allow(dead_code)]
+        message: Option<String>,
+    },
 }
 
 /// Messages sent from server to camera client.
 #[derive(Serialize)]
 #[serde(tag = "type")]
 enum ServerMessage {
-    /// Acknowledge registration.
     #[serde(rename = "registered")]
     Registered { camera_id: String },
-    /// Inference result for a frame.
     #[serde(rename = "result")]
     Result {
         camera_id: String,
@@ -47,14 +52,84 @@ enum ServerMessage {
         text: String,
         infer_secs: f64,
     },
-    /// Error message.
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "command")]
+    Command {
+        camera_id: String,
+        action: String,
+        params: serde_json::Value,
+    },
+}
+
+/// Send a command to a connected camera via its WebSocket channel.
+pub async fn send_camera_command(
+    state: &AppState,
+    camera_id: &str,
+    action: &str,
+    params: serde_json::Value,
+) -> Result<(), String> {
+    let cameras = state.cameras.read().await;
+    let cam = cameras
+        .get(camera_id)
+        .ok_or_else(|| format!("Camera '{}' not found", camera_id))?;
+    let tx = cam
+        .cmd_tx
+        .as_ref()
+        .ok_or_else(|| format!("Camera '{}' not connected", camera_id))?;
+    let msg = ServerMessage::Command {
+        camera_id: camera_id.to_string(),
+        action: action.to_string(),
+        params,
+    };
+    let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+    tx.send(json).map_err(|e| e.to_string())
+}
+
+/// Send a command to the first running camera.
+pub async fn send_command_to_any_camera(
+    state: &AppState,
+    action: &str,
+    params: serde_json::Value,
+) -> Result<String, String> {
+    let cameras = state.cameras.read().await;
+    let cam = cameras
+        .values()
+        .find(|c| c.running && c.cmd_tx.is_some())
+        .ok_or_else(|| "No connected camera available".to_string())?;
+    let camera_id = cam.camera_id.clone();
+    let tx = cam.cmd_tx.as_ref().unwrap();
+    let msg = ServerMessage::Command {
+        camera_id: camera_id.clone(),
+        action: action.to_string(),
+        params,
+    };
+    let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+    tx.send(json).map_err(|e| e.to_string())?;
+    Ok(camera_id)
 }
 
 async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
-    let (mut sender, mut receiver) = socket.split();
+    let (ws_sender, mut receiver) = socket.split();
+    let ws_sender = Arc::new(tokio::sync::Mutex::new(ws_sender));
     let mut camera_id: Option<String> = None;
+
+    // Channel for sending commands to this camera
+    let (cmd_tx, mut cmd_rx): (
+        mpsc::UnboundedSender<String>,
+        mpsc::UnboundedReceiver<String>,
+    ) = mpsc::unbounded_channel();
+
+    // Spawn task to forward commands from channel to WebSocket
+    let ws_sender_clone = ws_sender.clone();
+    let cmd_forwarder = tokio::spawn(async move {
+        while let Some(msg) = cmd_rx.recv().await {
+            let mut sender = ws_sender_clone.lock().await;
+            if sender.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    });
 
     info!("New WebSocket connection");
 
@@ -62,10 +137,10 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
         let msg = match msg {
             Ok(Message::Text(t)) => t,
             Ok(Message::Binary(b)) => {
-                // Binary messages: treat as raw JPEG frame if camera is registered
                 if let Some(ref cid) = camera_id {
                     let jpeg_bytes = b.to_vec();
-                    process_frame(&state, cid, &jpeg_bytes, &mut sender).await;
+                    let mut sender = ws_sender.lock().await;
+                    process_frame(&state, cid, &jpeg_bytes, &mut *sender).await;
                 }
                 continue;
             }
@@ -86,6 +161,7 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
                 let err = ServerMessage::Error {
                     message: format!("Invalid message: {}", e),
                 };
+                let mut sender = ws_sender.lock().await;
                 let _ = sender
                     .send(Message::Text(serde_json::to_string(&err).unwrap().into()))
                     .await;
@@ -105,9 +181,12 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
                 cameras
                     .entry(cid.clone())
                     .or_insert_with(|| CameraState::new(cid.clone(), name));
-                cameras.get_mut(&cid).unwrap().running = true;
+                let cam = cameras.get_mut(&cid).unwrap();
+                cam.running = true;
+                cam.cmd_tx = Some(cmd_tx.clone());
 
                 let ack = ServerMessage::Registered { camera_id: cid };
+                let mut sender = ws_sender.lock().await;
                 let _ = sender
                     .send(Message::Text(serde_json::to_string(&ack).unwrap().into()))
                     .await;
@@ -126,17 +205,31 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
                         continue;
                     }
                 };
-                process_frame(&state, &cid, &jpeg_bytes, &mut sender).await;
+                let mut sender = ws_sender.lock().await;
+                process_frame(&state, &cid, &jpeg_bytes, &mut *sender).await;
+            }
+            CameraMessage::CommandAck {
+                camera_id: cid,
+                action,
+                success,
+                ..
+            } => {
+                info!(
+                    "Camera {} command ack: action={} success={}",
+                    cid, action, success
+                );
             }
         }
     }
 
-    // Cleanup: mark camera as not running
+    // Cleanup: mark camera as not running, remove cmd_tx
+    cmd_forwarder.abort();
     if let Some(cid) = camera_id {
         info!("Camera {} disconnected", cid);
         let mut cameras = state.cameras.write().await;
         if let Some(cam) = cameras.get_mut(&cid) {
             cam.running = false;
+            cam.cmd_tx = None;
         }
     }
 }
@@ -145,7 +238,7 @@ async fn process_frame(
     state: &AppState,
     camera_id: &str,
     jpeg_bytes: &[u8],
-    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    sender: &mut (impl SinkExt<Message> + Unpin),
 ) {
     // Update latest frame
     let frame_no = {
@@ -180,6 +273,16 @@ async fn process_frame(
     // Parse structured JSON if possible
     let parsed_json = crate::monitor::parse_vlm_json(&text);
 
+    // Check for alerts
+    {
+        let mut tracker = state.alert_tracker.lock().await;
+        if let Some(alert) =
+            tracker.check_frame(camera_id, frame_no, &parsed_json, Some(jpeg_bytes.to_vec()))
+        {
+            let _ = state.alert_tx.send(alert);
+        }
+    }
+
     let now = chrono::Local::now().format("%H:%M:%S").to_string();
     let result = FrameResult {
         camera_id: camera_id.to_string(),
@@ -196,7 +299,6 @@ async fn process_frame(
         let mut cameras = state.cameras.write().await;
         if let Some(cam) = cameras.get_mut(camera_id) {
             cam.results.push(result.clone());
-            // Keep last 200 results
             if cam.results.len() > 200 {
                 cam.results.drain(..cam.results.len() - 200);
             }

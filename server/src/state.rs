@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
+use crate::alert::{AlertEvent, AlertTracker};
+use crate::asr::AsrClient;
 use crate::config::Config;
+use crate::llm::LlmClient;
 use crate::monitor::MonitorProfile;
+use crate::telegram::TelegramNotifier;
 use crate::vlm::VlmClient;
 
 /// A single inference result from analyzing a camera frame.
@@ -20,7 +24,6 @@ pub struct FrameResult {
 }
 
 /// Per-camera state tracked by the server.
-#[derive(Debug)]
 pub struct CameraState {
     pub camera_id: String,
     pub name: String,
@@ -30,6 +33,8 @@ pub struct CameraState {
     /// Rolling buffer of recent results (newest last).
     pub results: Vec<FrameResult>,
     pub running: bool,
+    /// Channel for sending commands to this camera via WebSocket.
+    pub cmd_tx: Option<mpsc::UnboundedSender<String>>,
 }
 
 impl CameraState {
@@ -41,7 +46,20 @@ impl CameraState {
             latest_frame: None,
             results: Vec::new(),
             running: false,
+            cmd_tx: None,
         }
+    }
+}
+
+impl std::fmt::Debug for CameraState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CameraState")
+            .field("camera_id", &self.camera_id)
+            .field("name", &self.name)
+            .field("frame_no", &self.frame_no)
+            .field("running", &self.running)
+            .field("has_cmd_tx", &self.cmd_tx.is_some())
+            .finish()
     }
 }
 
@@ -51,22 +69,40 @@ pub struct AppState {
     pub config: Config,
     pub cameras: Arc<RwLock<HashMap<String, CameraState>>>,
     pub vlm: Arc<VlmClient>,
+    pub asr: Option<Arc<AsrClient>>,
+    pub llm: Option<Arc<LlmClient>>,
     pub monitor_profiles: Arc<HashMap<String, MonitorProfile>>,
     /// Broadcast channel for SSE / live UI updates.
     pub events_tx: broadcast::Sender<String>,
+    /// Channel for alert events (fired by AlertTracker → consumed by Telegram notifier).
+    pub alert_tx: mpsc::UnboundedSender<AlertEvent>,
+    pub alert_tracker: Arc<Mutex<AlertTracker>>,
+    pub notifier: Option<Arc<TelegramNotifier>>,
 }
 
 impl AppState {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> (Self, mpsc::UnboundedReceiver<AlertEvent>) {
         let vlm = Arc::new(VlmClient::new(&config.vlm));
+        let asr = AsrClient::new(&config.asr).map(Arc::new);
+        let llm = LlmClient::new(&config.llm).map(Arc::new);
         let (events_tx, _) = broadcast::channel(256);
+        let (alert_tx, alert_rx) = mpsc::unbounded_channel();
         let monitor_profiles = Arc::new(crate::monitor::default_profiles());
-        Self {
+        let alert_tracker = Arc::new(Mutex::new(AlertTracker::new(&config.monitor)));
+        let notifier = TelegramNotifier::from_config(&config.telegram).map(Arc::new);
+
+        let state = Self {
             config,
             cameras: Arc::new(RwLock::new(HashMap::new())),
             vlm,
+            asr,
+            llm,
             monitor_profiles,
             events_tx,
-        }
+            alert_tx,
+            alert_tracker,
+            notifier,
+        };
+        (state, alert_rx)
     }
 }

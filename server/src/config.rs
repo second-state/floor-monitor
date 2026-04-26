@@ -9,6 +9,10 @@ pub struct Config {
     pub telegram: TelegramConfig,
     #[serde(default)]
     pub monitor: MonitorConfig,
+    #[serde(default)]
+    pub asr: AsrConfig,
+    #[serde(default)]
+    pub llm: LlmConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,6 +65,41 @@ impl Default for MonitorConfig {
             alert_cooldown_sec: default_alert_cooldown(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AsrConfig {
+    /// Whisper-compatible ASR endpoint (e.g. /v1/audio/transcriptions).
+    pub api_url: Option<String>,
+    pub api_key: Option<String>,
+    #[serde(default = "default_asr_model")]
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LlmConfig {
+    /// OpenAI-compatible chat completions endpoint for intent classification.
+    pub api_url: Option<String>,
+    pub api_key: Option<String>,
+    #[serde(default = "default_llm_model")]
+    pub model: String,
+    #[serde(default = "default_llm_max_tokens")]
+    pub max_tokens: u32,
+    #[serde(default = "default_llm_temperature")]
+    pub temperature: f32,
+}
+
+fn default_asr_model() -> String {
+    "whisper-1".to_string()
+}
+fn default_llm_model() -> String {
+    "qwen2.5:3b".to_string()
+}
+fn default_llm_max_tokens() -> u32 {
+    150
+}
+fn default_llm_temperature() -> f32 {
+    0.0
 }
 
 fn default_host() -> String {

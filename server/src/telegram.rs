@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+use crate::llm;
 use crate::state::AppState;
 
 const API_BASE: &str = "https://api.telegram.org/bot";
@@ -31,18 +32,36 @@ struct GetUpdatesResult {
 #[derive(Deserialize)]
 struct Update {
     update_id: i64,
-    message: Option<Message>,
+    message: Option<TgMessage>,
 }
 
 #[derive(Deserialize)]
-struct Message {
+struct TgMessage {
     chat: Chat,
     text: Option<String>,
+    voice: Option<Voice>,
 }
 
 #[derive(Deserialize)]
 struct Chat {
     id: i64,
+}
+
+#[derive(Deserialize)]
+struct Voice {
+    file_id: String,
+}
+
+#[derive(Deserialize)]
+struct GetFileResult {
+    #[allow(dead_code)]
+    ok: bool,
+    result: FileInfo,
+}
+
+#[derive(Deserialize)]
+struct FileInfo {
+    file_path: Option<String>,
 }
 
 impl TelegramNotifier {
@@ -129,19 +148,58 @@ impl TelegramNotifier {
     pub fn chat_id_i64(&self) -> i64 {
         self.chat_id.parse().unwrap_or(0)
     }
+
+    /// Download a file from Telegram by file_id (e.g. voice messages).
+    pub async fn download_file(
+        &self,
+        file_id: &str,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        // Step 1: getFile to get file_path
+        let resp = self
+            .http
+            .get(self.api_url("getFile"))
+            .query(&[("file_id", file_id)])
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await?;
+        let result: GetFileResult = resp.json().await?;
+        let file_path = result
+            .result
+            .file_path
+            .ok_or("Telegram getFile returned no file_path")?;
+
+        // Step 2: download the file
+        let file_url = format!(
+            "https://api.telegram.org/file/bot{}/{}",
+            self.bot_token, file_path
+        );
+        let resp = self
+            .http
+            .get(&file_url)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(format!("File download failed: {}", resp.status()).into());
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
 }
 
 const HELP_TEXT: &str = "\
 🤖 *Floor Monitor Bot*\n\
 Ask me about the camera feed, or request a summary.\n\n\
 *Commands:*\n\
-• Free-form visual question (ZH or EN)\n\
-• `过去 15 分钟怎么样？` — summarize recent activity\n\
-• `截图` or `/snapshot` — current frame photo\n\
-• `/help` · `/status`";
+• Free-form visual question (text or voice, ZH or EN)\n\
+• `summarize past 15 min` — summarize recent activity\n\
+• `/snapshot` — current frame photo\n\
+• `/patrol` — sweep camera across the room\n\
+• `pan left` / `pan right` — move camera\n\
+• `/help` · `/status`\n\n\
+Voice messages are also supported — just send a voice note!";
 
 /// Start the Telegram long-polling listener as a background task.
-pub fn start_listener(state: Arc<AppState>, notifier: TelegramNotifier) {
+pub fn start_listener(state: Arc<AppState>, notifier: Arc<TelegramNotifier>) {
     tokio::spawn(async move {
         info!("Telegram listener started");
         let mut offset: Option<i64> = None;
@@ -163,6 +221,14 @@ pub fn start_listener(state: Arc<AppState>, notifier: TelegramNotifier) {
                             if msg.chat.id != notifier.chat_id_i64() {
                                 continue;
                             }
+
+                            // Handle voice messages
+                            if let Some(voice) = msg.voice {
+                                handle_voice(&state, &notifier, &voice.file_id).await;
+                                continue;
+                            }
+
+                            // Handle text messages
                             if let Some(text) = msg.text {
                                 let text = text.trim().to_string();
                                 if text.is_empty() {
@@ -202,36 +268,140 @@ async fn get_updates(
     Ok(result.result)
 }
 
+/// Handle a voice message: download OGG → ASR transcribe → handle as text.
+async fn handle_voice(state: &AppState, notifier: &TelegramNotifier, file_id: &str) {
+    let asr = match &state.asr {
+        Some(asr) => asr,
+        None => {
+            notifier
+                .send("🎙️ Voice messages require ASR to be configured. Add `[asr]` to config.toml.")
+                .await;
+            return;
+        }
+    };
+
+    notifier.send("🎙️ Transcribing voice message...").await;
+
+    // Download OGG from Telegram
+    let ogg_bytes = match notifier.download_file(file_id).await {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("Failed to download voice file: {}", e);
+            notifier
+                .send(&format!("Failed to download voice: {}", e))
+                .await;
+            return;
+        }
+    };
+
+    // Transcribe
+    match asr.transcribe(&ogg_bytes, "voice.ogg").await {
+        Ok(text) => {
+            info!("Voice transcribed: {}", &text[..text.len().min(80)]);
+            notifier
+                .send(&format!("🎙️ _{}_", &text[..text.len().min(200)]))
+                .await;
+            handle_message(state, notifier, &text).await;
+        }
+        Err(e) => {
+            warn!("ASR failed: {}", e);
+            notifier.send(&format!("Transcription failed: {}", e)).await;
+        }
+    }
+}
+
+/// Handle a text message: classify intent (via LLM or keywords), dispatch.
 async fn handle_message(state: &AppState, notifier: &TelegramNotifier, text: &str) {
-    let low = text.to_lowercase();
+    // Classify intent
+    let intent = if let Some(ref llm) = state.llm {
+        match llm.classify(text).await {
+            Ok(i) => {
+                info!("LLM intent: {:?}", i);
+                i
+            }
+            Err(e) => {
+                warn!("LLM classify failed, falling back to keywords: {}", e);
+                llm::classify_keywords(text)
+            }
+        }
+    } else {
+        llm::classify_keywords(text)
+    };
 
-    // Fast slash-command path
-    if matches!(low.as_str(), "/help" | "help" | "/start") {
-        notifier.send(HELP_TEXT).await;
-        return;
+    // Dispatch
+    match intent {
+        llm::Intent::Help => {
+            notifier.send(HELP_TEXT).await;
+        }
+        llm::Intent::Status => {
+            let cameras = state.cameras.read().await;
+            let active = cameras.values().filter(|c| c.running).count();
+            let total_frames: u64 = cameras.values().map(|c| c.frame_no).sum();
+            let status = format!(
+                "📟 Cameras: {} active | Frames: {} | Model: {}",
+                active,
+                total_frames,
+                state.vlm.model_name()
+            );
+            notifier.send(&status).await;
+        }
+        llm::Intent::Snapshot => {
+            snapshot_reply(state, notifier).await;
+        }
+        llm::Intent::VisualQuestion { question } => {
+            notifier.send("🔍 Analyzing current frame...").await;
+            let answer = ask_visual(state, &question).await;
+            notifier.send(&format!("👁️ {}", answer)).await;
+        }
+        llm::Intent::HistorySummary { minutes } => {
+            notifier
+                .send(&format!("⏳ Summarizing past {} minutes...", minutes))
+                .await;
+            let summary = build_history_summary(state, minutes).await;
+            notifier
+                .send(&format!("📊 *Past {} min*\n\n{}", minutes, summary))
+                .await;
+        }
+        llm::Intent::Patrol => {
+            match crate::ws::send_command_to_any_camera(
+                state,
+                "patrol",
+                serde_json::json!({"sweep": true}),
+            )
+            .await
+            {
+                Ok(cam_id) => {
+                    notifier
+                        .send(&format!("🔄 Patrol command sent to camera `{}`", cam_id))
+                        .await;
+                }
+                Err(e) => {
+                    notifier.send(&format!("❌ {}", e)).await;
+                }
+            }
+        }
+        llm::Intent::PtzControl { direction } => {
+            match crate::ws::send_command_to_any_camera(
+                state,
+                "ptz",
+                serde_json::json!({"direction": direction}),
+            )
+            .await
+            {
+                Ok(cam_id) => {
+                    notifier
+                        .send(&format!(
+                            "🎯 PTZ `{}` sent to camera `{}`",
+                            direction, cam_id
+                        ))
+                        .await;
+                }
+                Err(e) => {
+                    notifier.send(&format!("❌ {}", e)).await;
+                }
+            }
+        }
     }
-    if low == "/status" {
-        let cameras = state.cameras.read().await;
-        let active = cameras.values().filter(|c| c.running).count();
-        let total_frames: u64 = cameras.values().map(|c| c.frame_no).sum();
-        let status = format!(
-            "📟 Cameras: {} active | Frames: {} | Model: {}",
-            active,
-            total_frames,
-            state.vlm.model_name()
-        );
-        notifier.send(&status).await;
-        return;
-    }
-    if matches!(low.as_str(), "/snapshot" | "截图" | "发图" | "snapshot") {
-        snapshot_reply(state, notifier).await;
-        return;
-    }
-
-    // Default: visual question on latest frame
-    notifier.send("🔍 Analyzing current frame...").await;
-    let answer = ask_visual(state, text).await;
-    notifier.send(&format!("👁️ {}", answer)).await;
 }
 
 async fn snapshot_reply(state: &AppState, notifier: &TelegramNotifier) {
@@ -269,5 +439,41 @@ async fn ask_visual(state: &AppState, question: &str) -> String {
             }
         }
         Err(e) => format!("Inference error: {}", e),
+    }
+}
+
+/// Build a history summary from recent frame results using VLM.
+async fn build_history_summary(state: &AppState, minutes: u32) -> String {
+    let cameras = state.cameras.read().await;
+    let cutoff = chrono::Local::now() - chrono::Duration::minutes(i64::from(minutes));
+    let cutoff_str = cutoff.format("%H:%M:%S").to_string();
+
+    let mut entries: Vec<String> = Vec::new();
+    for cam in cameras.values() {
+        for r in cam.results.iter().rev().take(100) {
+            if r.time >= cutoff_str {
+                entries.push(format!("{} [{}] {}", r.time, r.camera_id, r.text));
+            }
+        }
+    }
+    drop(cameras);
+
+    if entries.is_empty() {
+        return format!("No activity recorded in the past {} minutes.", minutes);
+    }
+
+    // Build compact digest and summarize with VLM
+    entries.reverse();
+    let digest = entries.join("\n");
+    let prompt = format!(
+        "Below are camera observation records from the past {} minutes.\
+         Write a concise summary (under 200 words) focusing on main activities and anomalies.\
+         If nothing notable happened, state that briefly.\n\nRecords:\n{}\n\nSummary:",
+        minutes, digest
+    );
+
+    match state.vlm.infer_text_only(&prompt).await {
+        Ok((text, _)) => text,
+        Err(e) => format!("Summary generation failed: {}", e),
     }
 }

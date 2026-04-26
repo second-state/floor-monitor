@@ -129,3 +129,163 @@ fn test_config_ollama_format_detection() {
     let client = floor_monitor_server::vlm::VlmClient::new(&cfg);
     assert_eq!(client.model_name(), "qwen2.5-vl:3b");
 }
+
+// --- Alert tracker tests ---
+
+#[test]
+fn test_alert_tracker_fires_after_consecutive() {
+    let config = floor_monitor_server::config::MonitorConfig {
+        default_profile: "kid".to_string(),
+        summary_window_min: 30,
+        alert_consecutive: 2,
+        alert_cooldown_sec: 0.0, // no cooldown for test
+    };
+    let mut tracker = floor_monitor_server::alert::AlertTracker::new(&config);
+    let high_json = Some(
+        serde_json::json!({"risk_level": "high", "risk_reason": "intruder", "activity": "test"}),
+    );
+
+    // First high-risk frame: no alert yet
+    assert!(tracker.check_frame("cam1", 1, &high_json, None).is_none());
+    // Second: should fire
+    assert!(tracker.check_frame("cam1", 2, &high_json, None).is_some());
+}
+
+#[test]
+fn test_alert_tracker_resets_on_none() {
+    let config = floor_monitor_server::config::MonitorConfig {
+        default_profile: "kid".to_string(),
+        summary_window_min: 30,
+        alert_consecutive: 2,
+        alert_cooldown_sec: 0.0,
+    };
+    let mut tracker = floor_monitor_server::alert::AlertTracker::new(&config);
+    let high =
+        Some(serde_json::json!({"risk_level": "high", "risk_reason": "test", "activity": "x"}));
+    let none = Some(serde_json::json!({"risk_level": "none", "activity": "normal"}));
+
+    // One high, then none resets
+    assert!(tracker.check_frame("cam1", 1, &high, None).is_none());
+    assert!(tracker.check_frame("cam1", 2, &none, None).is_none());
+    // Need 2 consecutive again
+    assert!(tracker.check_frame("cam1", 3, &high, None).is_none());
+    assert!(tracker.check_frame("cam1", 4, &high, None).is_some());
+}
+
+#[test]
+fn test_alert_tracker_cooldown() {
+    let config = floor_monitor_server::config::MonitorConfig {
+        default_profile: "kid".to_string(),
+        summary_window_min: 30,
+        alert_consecutive: 1,
+        alert_cooldown_sec: 9999.0, // very long cooldown
+    };
+    let mut tracker = floor_monitor_server::alert::AlertTracker::new(&config);
+    let high =
+        Some(serde_json::json!({"risk_level": "high", "risk_reason": "test", "activity": "x"}));
+
+    // First fires
+    assert!(tracker.check_frame("cam1", 1, &high, None).is_some());
+    // Second blocked by cooldown
+    assert!(tracker.check_frame("cam1", 2, &high, None).is_none());
+}
+
+// --- Intent classification tests ---
+
+#[test]
+fn test_keyword_classify_help() {
+    let intent = floor_monitor_server::llm::classify_keywords("/help");
+    assert!(matches!(intent, floor_monitor_server::llm::Intent::Help));
+}
+
+#[test]
+fn test_keyword_classify_snapshot() {
+    let intent = floor_monitor_server::llm::classify_keywords("/snapshot");
+    assert!(matches!(
+        intent,
+        floor_monitor_server::llm::Intent::Snapshot
+    ));
+}
+
+#[test]
+fn test_keyword_classify_patrol() {
+    let intent = floor_monitor_server::llm::classify_keywords("patrol");
+    assert!(matches!(intent, floor_monitor_server::llm::Intent::Patrol));
+}
+
+#[test]
+fn test_keyword_classify_ptz() {
+    let intent = floor_monitor_server::llm::classify_keywords("pan left please");
+    match intent {
+        floor_monitor_server::llm::Intent::PtzControl { direction } => {
+            assert_eq!(direction, "pan_left");
+        }
+        _ => panic!("Expected PtzControl"),
+    }
+}
+
+#[test]
+fn test_keyword_classify_visual_question() {
+    let intent = floor_monitor_server::llm::classify_keywords("how many people are there?");
+    assert!(matches!(
+        intent,
+        floor_monitor_server::llm::Intent::VisualQuestion { .. }
+    ));
+}
+
+#[test]
+fn test_parse_intent_valid_json() {
+    let raw = r#"{"intent":"snapshot"}"#;
+    let intent = floor_monitor_server::llm::parse_intent(raw).unwrap();
+    assert!(matches!(
+        intent,
+        floor_monitor_server::llm::Intent::Snapshot
+    ));
+}
+
+#[test]
+fn test_parse_intent_with_junk() {
+    let raw = r#"Sure! Here's the result: {"intent":"patrol"} hope that helps"#;
+    let intent = floor_monitor_server::llm::parse_intent(raw).unwrap();
+    assert!(matches!(intent, floor_monitor_server::llm::Intent::Patrol));
+}
+
+#[test]
+fn test_config_with_asr_and_llm() {
+    let toml_str = r#"
+[server]
+host = "0.0.0.0"
+port = 3456
+
+[vlm]
+api_url = "http://localhost:11434/api/generate"
+model = "test"
+
+[asr]
+api_url = "http://localhost:8080/v1/audio/transcriptions"
+model = "whisper-1"
+
+[llm]
+api_url = "http://localhost:11434/api/generate"
+model = "qwen2.5:3b"
+"#;
+    let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
+    assert!(config.asr.api_url.is_some());
+    assert!(config.llm.api_url.is_some());
+    assert_eq!(config.asr.model, "whisper-1");
+    assert_eq!(config.llm.model, "qwen2.5:3b");
+}
+
+#[test]
+fn test_config_without_asr_and_llm() {
+    let toml_str = r#"
+[server]
+port = 3456
+
+[vlm]
+api_url = "http://localhost:11434/api/generate"
+"#;
+    let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
+    assert!(config.asr.api_url.is_none());
+    assert!(config.llm.api_url.is_none());
+}

@@ -7,7 +7,7 @@ port = 3456
 # VLM / LLM inference backend
 # Supports any OpenAI-compatible API or Ollama native API.
 # The client auto-detects the format from the URL path:
-#   - URLs containing "/v1/" → OpenAI-compatible (vLLM, LiteLLM, OpenAI, etc.)
+#   - URLs containing "/v1/" → OpenAI-compatible (vLLM, OpenAI, etc.)
 #   - Other URLs → Ollama native format
 [vlm]
 
@@ -15,7 +15,8 @@ port = 3456
 api_url = "http://localhost:11434/api/generate"
 model = "qwen2.5-vl:3b"
 
-# --- Option 2: vLLM (local or remote) ---
+# --- Option 2: vLLM with Qwen (local) ---
+# vllm serve Qwen/Qwen2.5-VL-3B-Instruct
 # api_url = "http://localhost:8000/v1/chat/completions"
 # model = "Qwen/Qwen2.5-VL-3B-Instruct"
 
@@ -24,10 +25,6 @@ model = "qwen2.5-vl:3b"
 # api_key = "sk-..."
 # model = "gpt-4o-mini"
 
-# --- Option 4: LiteLLM proxy ---
-# api_url = "http://localhost:4000/v1/chat/completions"
-# model = "ollama/qwen2.5-vl:3b"
-
 max_tokens = 200
 temperature = 0.1
 
@@ -35,6 +32,24 @@ temperature = 0.1
 [telegram]
 # bot_token = "123456:ABC-DEF..."
 # chat_id = "12345678"
+
+# Optional: ASR (speech-to-text) for Telegram voice messages
+# Requires ffmpeg installed for OGG→WAV conversion.
+# Any Whisper-compatible endpoint works (OpenAI, local whisper-server, etc.)
+# [asr]
+# api_url = "https://api.openai.com/v1/audio/transcriptions"
+# api_key = "sk-..."
+# model = "whisper-1"
+
+# Optional: LLM for intent classification of Telegram messages
+# Used to route natural language (text or transcribed voice) to the right
+# handler: visual question, PTZ control, patrol, snapshot, history summary.
+# Without this, the bot uses simple keyword matching.
+# [llm]
+# api_url = "http://localhost:11434/api/generate"
+# model = "qwen2.5:3b"
+# max_tokens = 150
+# temperature = 0.0
 
 # Monitor mode defaults
 [monitor]

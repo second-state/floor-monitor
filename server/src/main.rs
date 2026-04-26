@@ -35,10 +35,82 @@ async fn main() {
         config.server.port,
     );
 
-    let state = Arc::new(AppState::new(config.clone()));
+    let (state, mut alert_rx) = AppState::new(config.clone());
+    let state = Arc::new(state);
 
-    // Start Telegram listener if configured
-    if let Some(notifier) = telegram::TelegramNotifier::from_config(&config.telegram) {
+    // Spawn alert consumer — sends Telegram notifications for high-risk detections
+    if let Some(ref notifier) = state.notifier {
+        let n = notifier.clone();
+        tokio::spawn(async move {
+            while let Some(alert) = alert_rx.recv().await {
+                let text = format!(
+                    "⚠️ *Alert*\n*Camera*: {}\n*Risk*: {}\n*Reason*: {}\n*Activity*: {}\n*Frame*: {}",
+                    alert.camera_id, alert.risk_level, alert.risk_reason, alert.activity, alert.frame_no
+                );
+                if let Some(jpeg) = alert.jpeg {
+                    if !n.send_photo(jpeg, &text).await {
+                        n.send(&text).await;
+                    }
+                } else {
+                    n.send(&text).await;
+                }
+            }
+        });
+
+        // Spawn summary scheduler
+        let summary_min = config.monitor.summary_window_min;
+        if summary_min > 0 {
+            let s = state.clone();
+            let n2 = notifier.clone();
+            let profile_id = config.monitor.default_profile.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                    u64::from(summary_min) * 60,
+                ));
+                interval.tick().await; // skip first immediate tick
+                loop {
+                    interval.tick().await;
+                    info!("Summary scheduler firing ({}min window)", summary_min);
+
+                    let summary_intro = s
+                        .monitor_profiles
+                        .get(&profile_id)
+                        .map(|p| p.summary_intro.as_str())
+                        .unwrap_or("Summarize the recent activity.");
+
+                    // Collect recent results
+                    let cameras = s.cameras.read().await;
+                    let mut entries: Vec<String> = Vec::new();
+                    for cam in cameras.values() {
+                        for r in cam.results.iter().rev().take(80) {
+                            entries.push(format!("{} [{}] {}", r.time, r.camera_id, r.text));
+                        }
+                    }
+                    drop(cameras);
+
+                    if entries.is_empty() {
+                        continue;
+                    }
+
+                    entries.reverse();
+                    let digest = entries.join("\n");
+                    let prompt = format!("{}\n\n{}", summary_intro, digest);
+
+                    match s.vlm.infer_text_only(&prompt).await {
+                        Ok((text, _)) => {
+                            let msg =
+                                format!("🕒 *{} min activity summary*\n\n{}", summary_min, text);
+                            n2.send(&msg).await;
+                        }
+                        Err(e) => {
+                            info!("Summary generation failed: {}", e);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Start Telegram listener
         info!("Telegram bot enabled");
         let startup_msg = format!(
             "🟢 *Floor Monitor Server started*\nAddress: http://{}:{}\nModel: {}",
@@ -48,7 +120,7 @@ async fn main() {
         tokio::spawn(async move {
             n.send(&startup_msg).await;
         });
-        telegram::start_listener(state.clone(), notifier);
+        telegram::start_listener(state.clone(), notifier.clone());
     }
 
     // Build routes
