@@ -25,8 +25,7 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct VlmConfig {
-    /// API endpoint URL. Supports OpenAI-compatible (`/v1/chat/completions`)
-    /// and Ollama native (`/api/generate`). Auto-detected from URL path.
+    /// OpenAI-compatible API endpoint (e.g. `/v1/chat/completions`).
     pub api_url: String,
     /// Optional API key for authenticated endpoints (OpenAI, cloud providers).
     pub api_key: Option<String>,
@@ -109,7 +108,7 @@ fn default_port() -> u16 {
     3456
 }
 fn default_model() -> String {
-    "qwen2.5-vl:3b".to_string()
+    "Qwen/Qwen2.5-VL-3B-Instruct".to_string()
 }
 fn default_max_tokens() -> u32 {
     200

@@ -37,14 +37,7 @@ pub struct LlmClient {
     model: String,
     max_tokens: u32,
     temperature: f32,
-    format: ApiFormat,
     http: reqwest::Client,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum ApiFormat {
-    OpenAI,
-    Ollama,
 }
 
 const SYSTEM_PROMPT: &str = r#"You are a dispatcher for a camera monitoring bot. Given a user message, output ONLY a single line of compact JSON (no explanation, no code fences).
@@ -67,10 +60,8 @@ Possible intents:
 
 JSON:"#;
 
-// --- OpenAI request/response structs ---
-
 #[derive(Serialize)]
-struct OpenAIRequest {
+struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     max_tokens: u32,
@@ -84,40 +75,18 @@ struct ChatMessage {
 }
 
 #[derive(Deserialize)]
-struct OpenAIResponse {
-    choices: Vec<OpenAIChoice>,
+struct ChatResponse {
+    choices: Vec<Choice>,
 }
 
 #[derive(Deserialize)]
-struct OpenAIChoice {
-    message: OpenAIRespMessage,
+struct Choice {
+    message: ResponseMessage,
 }
 
 #[derive(Deserialize)]
-struct OpenAIRespMessage {
+struct ResponseMessage {
     content: String,
-}
-
-// --- Ollama request/response structs ---
-
-#[derive(Serialize)]
-struct OllamaRequest {
-    model: String,
-    prompt: String,
-    system: String,
-    stream: bool,
-    options: OllamaOptions,
-}
-
-#[derive(Serialize)]
-struct OllamaOptions {
-    num_predict: u32,
-    temperature: f32,
-}
-
-#[derive(Deserialize)]
-struct OllamaResponse {
-    response: Option<String>,
 }
 
 impl LlmClient {
@@ -127,22 +96,13 @@ impl LlmClient {
         if url.is_empty() {
             return None;
         }
-        let format = if url.contains("/v1/") {
-            ApiFormat::OpenAI
-        } else {
-            ApiFormat::Ollama
-        };
-        info!(
-            "LLM client: model={} format={:?} url={}",
-            config.model, format, url
-        );
+        info!("LLM client: model={} url={}", config.model, url);
         Some(Self {
             api_url: url.to_string(),
             api_key: config.api_key.clone(),
             model: config.model.clone(),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
-            format,
             http: reqwest::Client::new(),
         })
     }
@@ -152,19 +112,7 @@ impl LlmClient {
         &self,
         user_text: &str,
     ) -> Result<Intent, Box<dyn std::error::Error + Send + Sync>> {
-        let raw = match self.format {
-            ApiFormat::OpenAI => self.call_openai(user_text).await?,
-            ApiFormat::Ollama => self.call_ollama(user_text).await?,
-        };
-
-        parse_intent(&raw)
-    }
-
-    async fn call_openai(
-        &self,
-        user_text: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let payload = OpenAIRequest {
+        let payload = ChatRequest {
             model: self.model.clone(),
             messages: vec![
                 ChatMessage {
@@ -203,50 +151,14 @@ impl LlmClient {
             .into());
         }
 
-        let body: OpenAIResponse = resp.json().await?;
-        Ok(body
+        let body: ChatResponse = resp.json().await?;
+        let raw = body
             .choices
             .first()
             .map(|c| c.message.content.trim().to_string())
-            .unwrap_or_default())
-    }
+            .unwrap_or_default();
 
-    async fn call_ollama(
-        &self,
-        user_text: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let payload = OllamaRequest {
-            model: self.model.clone(),
-            prompt: user_text.to_string(),
-            system: SYSTEM_PROMPT.to_string(),
-            stream: false,
-            options: OllamaOptions {
-                num_predict: self.max_tokens,
-                temperature: self.temperature,
-            },
-        };
-
-        let resp = self
-            .http
-            .post(&self.api_url)
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!(
-                "LLM API returned {}: {}",
-                status,
-                &body[..body.len().min(200)]
-            )
-            .into());
-        }
-
-        let body: OllamaResponse = resp.json().await?;
-        Ok(body.response.unwrap_or_default().trim().to_string())
+        parse_intent(&raw)
     }
 }
 

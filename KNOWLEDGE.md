@@ -38,26 +38,18 @@ When a WebSocket disconnects, the server marks the camera as `running: false` bu
 
 ## VLM Integration
 
-### Dual API Format Support
+### OpenAI-Compatible API Only
 
-The VLM client auto-detects the API format from the URL:
-- URLs containing `/v1/` → OpenAI-compatible format (works with vLLM, OpenAI, etc.)
-- Other URLs → Ollama native format
-
-This detection happens once at startup based on the config. If you need to switch backends, change the `api_url` in `config.toml`.
+All API sections (`[vlm]`, `[llm]`, `[asr]`) use the standard OpenAI API format exclusively. There is no Ollama-native format support. If using Ollama, point to its OpenAI-compatible endpoint (`http://localhost:11434/v1/chat/completions`).
 
 ### OpenAI Vision Format
 
-For OpenAI-compatible endpoints, images are sent as base64 data URLs in the `content` array:
+Images are sent as base64 data URLs in the `content` array:
 ```json
 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
 ```
 
 Not all OpenAI-compatible servers support vision. Ensure your model supports image input.
-
-### Ollama Image Format
-
-Ollama uses a separate `images` array with plain base64 strings (no data URL prefix).
 
 ### Text-Only VLM Calls
 

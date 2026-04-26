@@ -28,15 +28,15 @@ or anywhere on the network.
 │                         │  WS     │  /ws       WebSocket handler      │
 │  USB / RTSP capture ────┼────────▶│  /dashboard  Web UI (Tera + SSE) │
 │  JPEG encode + send     │◀────────┤  /api/*    REST endpoints         │
-│  Receive results        │  Result │  VLM client  (OpenAI / Ollama)   │
+│  Receive results        │  Result │  VLM client  (OpenAI-compatible)  │
 └─────────────────────────┘         │  Telegram bot (optional)          │
                                     └───────────────────────────────────┘
 ```
 
 ## Features
 
-- **Generic VLM/LLM backend** — Any OpenAI-compatible endpoint (vLLM, OpenAI)
-  or Ollama native API. Auto-detected from the URL path in config.
+- **Generic VLM/LLM backend** — Any OpenAI-compatible `/v1/chat/completions` endpoint
+  (vLLM, OpenAI, Ollama via its OpenAI endpoint, etc.).
 - **Monitor profiles** — Domain-specific structured JSON prompts: Kid, Office,
   Retail Store, Home Security. Alerts on high-risk frames; periodic summaries.
 - **Web dashboard** — Live camera preview, streaming analysis results via SSE.
@@ -54,18 +54,22 @@ or anywhere on the network.
 
 - Rust 1.75+ (for the server)
 - Python 3.11+ (for the Python camera client)
-- A VLM backend: [Ollama](https://ollama.com) with a vision model, or any
-  OpenAI-compatible endpoint (vLLM, OpenAI, etc.)
+- A VLM backend serving an OpenAI-compatible `/v1/chat/completions` endpoint.
+  Options: [vLLM](https://github.com/vllm-project/vllm),
+  [Ollama](https://ollama.com) (with its OpenAI-compatible endpoint),
+  OpenAI API, or any compatible provider.
 
 ### 1. Start a VLM backend
 
 ```bash
-# Option A: Ollama (easiest)
+# Option A: vLLM with Qwen (recommended for local)
+pip install vllm
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct
+
+# Option B: Ollama (use its OpenAI-compatible endpoint)
 ollama pull qwen2.5-vl:3b
 ollama serve
-
-# Option B: vLLM
-vllm serve Qwen/Qwen2.5-VL-3B-Instruct
+# Then set api_url = "http://localhost:11434/v1/chat/completions" in config.toml
 ```
 
 ### 2. Build and start the server
@@ -119,14 +123,14 @@ host = "0.0.0.0"
 port = 3456
 
 [vlm]
-# Ollama
-api_url = "http://localhost:11434/api/generate"
-model = "qwen2.5-vl:3b"
+# vLLM with Qwen
+api_url = "http://localhost:8000/v1/chat/completions"
+model = "Qwen/Qwen2.5-VL-3B-Instruct"
 
-# Or vLLM / OpenAI-compatible
-# api_url = "http://localhost:8000/v1/chat/completions"
+# Or OpenAI cloud
+# api_url = "https://api.openai.com/v1/chat/completions"
 # api_key = "sk-..."
-# model = "Qwen/Qwen2.5-VL-3B-Instruct"
+# model = "gpt-4o-mini"
 
 max_tokens = 200
 temperature = 0.1
@@ -135,6 +139,15 @@ temperature = 0.1
 # bot_token = "123456:ABC-DEF..."
 # chat_id = "12345678"
 
+# [asr]
+# api_url = "https://api.openai.com/v1/audio/transcriptions"
+# api_key = "sk-..."
+# model = "whisper-1"
+
+# [llm]
+# api_url = "http://localhost:8000/v1/chat/completions"
+# model = "Qwen/Qwen2.5-3B-Instruct"
+
 [monitor]
 default_profile = "kid"        # kid | office | retail | security
 summary_window_min = 30
@@ -142,8 +155,7 @@ alert_consecutive = 2
 alert_cooldown_sec = 120
 ```
 
-The VLM client auto-detects the API format: URLs containing `/v1/` use
-OpenAI-compatible format; other URLs use Ollama native format.
+All API sections (`[vlm]`, `[llm]`, `[asr]`) use OpenAI-compatible endpoints.
 
 ### Camera (`camera/camera.toml`)
 

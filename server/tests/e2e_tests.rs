@@ -42,7 +42,7 @@ fn test_state() -> Arc<floor_monitor_server::state::AppState> {
         },
         vlm: floor_monitor_server::config::VlmConfig {
             api_url: std::env::var("FLOOR_MONITOR_VLM_URL")
-                .unwrap_or_else(|_| "http://localhost:99999/api/generate".to_string()),
+                .unwrap_or_else(|_| "http://localhost:99999/v1/chat/completions".to_string()),
             api_key: std::env::var("FLOOR_MONITOR_VLM_KEY").ok(),
             model: std::env::var("FLOOR_MONITOR_VLM_MODEL")
                 .unwrap_or_else(|_| "test-model".to_string()),

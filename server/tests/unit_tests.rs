@@ -117,17 +117,16 @@ fn test_config_openai_format_detection() {
 }
 
 #[test]
-fn test_config_ollama_format_detection() {
-    // Ollama-style URL
+fn test_config_vlm_client_creation() {
     let cfg = floor_monitor_server::config::VlmConfig {
-        api_url: "http://localhost:11434/api/generate".to_string(),
-        api_key: None,
-        model: "qwen2.5-vl:3b".to_string(),
+        api_url: "http://localhost:8000/v1/chat/completions".to_string(),
+        api_key: Some("test-key".to_string()),
+        model: "Qwen/Qwen2.5-VL-3B-Instruct".to_string(),
         max_tokens: 200,
         temperature: 0.1,
     };
     let client = floor_monitor_server::vlm::VlmClient::new(&cfg);
-    assert_eq!(client.model_name(), "qwen2.5-vl:3b");
+    assert_eq!(client.model_name(), "Qwen/Qwen2.5-VL-3B-Instruct");
 }
 
 // --- Alert tracker tests ---
@@ -258,7 +257,7 @@ host = "0.0.0.0"
 port = 3456
 
 [vlm]
-api_url = "http://localhost:11434/api/generate"
+api_url = "http://localhost:8000/v1/chat/completions"
 model = "test"
 
 [asr]
@@ -266,7 +265,7 @@ api_url = "http://localhost:8080/v1/audio/transcriptions"
 model = "whisper-1"
 
 [llm]
-api_url = "http://localhost:11434/api/generate"
+api_url = "http://localhost:8000/v1/chat/completions"
 model = "qwen2.5:3b"
 "#;
     let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
@@ -283,7 +282,7 @@ fn test_config_without_asr_and_llm() {
 port = 3456
 
 [vlm]
-api_url = "http://localhost:11434/api/generate"
+api_url = "http://localhost:8000/v1/chat/completions"
 "#;
     let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
     assert!(config.asr.api_url.is_none());

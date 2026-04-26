@@ -15,7 +15,7 @@ fn test_state() -> Arc<floor_monitor_server::state::AppState> {
             port: 0, // will bind to random port
         },
         vlm: floor_monitor_server::config::VlmConfig {
-            api_url: "http://localhost:99999/api/generate".to_string(), // unreachable
+            api_url: "http://localhost:99999/v1/chat/completions".to_string(), // unreachable
             api_key: None,
             model: "test-model".to_string(),
             max_tokens: 100,

@@ -4,67 +4,35 @@ use tracing::{info, warn};
 
 use crate::config::VlmConfig;
 
-/// API format auto-detected from the URL path.
-#[derive(Debug, Clone, PartialEq)]
-enum ApiFormat {
-    /// OpenAI-compatible /v1/chat/completions (works with vLLM, OpenAI, etc.)
-    OpenAI,
-    /// Ollama native /api/generate
-    Ollama,
-}
-
-/// Generic VLM client that supports both OpenAI-compatible and Ollama APIs.
+/// VLM client using OpenAI-compatible chat completions API.
+/// Works with any endpoint that supports the OpenAI vision format:
+/// vLLM, Ollama (/v1/chat/completions), OpenAI, etc.
 pub struct VlmClient {
     api_url: String,
     api_key: Option<String>,
     model: String,
     max_tokens: u32,
     temperature: f32,
-    format: ApiFormat,
     http: reqwest::Client,
 }
 
-// --- Ollama request/response ---
-
 #[derive(Serialize)]
-struct OllamaRequest {
+struct ChatRequest {
     model: String,
-    prompt: String,
-    images: Vec<String>,
-    stream: bool,
-    options: OllamaOptions,
-}
-
-#[derive(Serialize)]
-struct OllamaOptions {
-    num_predict: u32,
-    temperature: f32,
-}
-
-#[derive(Deserialize)]
-struct OllamaResponse {
-    response: Option<String>,
-}
-
-// --- OpenAI-compatible request/response ---
-
-#[derive(Serialize)]
-struct OpenAIRequest {
-    model: String,
-    messages: Vec<OpenAIMessage>,
+    messages: Vec<ChatMessage>,
     max_tokens: u32,
     temperature: f32,
 }
 
 #[derive(Serialize)]
-struct OpenAIMessage {
+struct ChatMessage {
     role: String,
-    content: Vec<OpenAIContent>,
+    content: Vec<ContentPart>,
 }
 
 #[derive(Serialize)]
 #[serde(tag = "type")]
-enum OpenAIContent {
+enum ContentPart {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image_url")]
@@ -77,39 +45,29 @@ struct ImageUrl {
 }
 
 #[derive(Deserialize)]
-struct OpenAIResponse {
-    choices: Vec<OpenAIChoice>,
+struct ChatResponse {
+    choices: Vec<Choice>,
 }
 
 #[derive(Deserialize)]
-struct OpenAIChoice {
-    message: OpenAIRespMessage,
+struct Choice {
+    message: ResponseMessage,
 }
 
 #[derive(Deserialize)]
-struct OpenAIRespMessage {
+struct ResponseMessage {
     content: String,
 }
 
 impl VlmClient {
     pub fn new(config: &VlmConfig) -> Self {
-        let format = if config.api_url.contains("/v1/") {
-            ApiFormat::OpenAI
-        } else {
-            ApiFormat::Ollama
-        };
-        info!(
-            "VLM client: model={} format={:?} url={}",
-            config.model, format, config.api_url
-        );
-
+        info!("VLM client: model={} url={}", config.model, config.api_url);
         Self {
             api_url: config.api_url.clone(),
             api_key: config.api_key.clone(),
             model: config.model.clone(),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
-            format,
             http: reqwest::Client::new(),
         }
     }
@@ -121,44 +79,18 @@ impl VlmClient {
         jpeg_bytes: &[u8],
         prompt: &str,
     ) -> Result<(String, f64), Box<dyn std::error::Error + Send + Sync>> {
-        match self.format {
-            ApiFormat::OpenAI => self.infer_openai(jpeg_bytes, prompt).await,
-            ApiFormat::Ollama => self.infer_ollama(jpeg_bytes, prompt).await,
-        }
-    }
-
-    /// Text-only inference using a tiny placeholder image.
-    pub async fn infer_text_only(
-        &self,
-        prompt: &str,
-    ) -> Result<(String, f64), Box<dyn std::error::Error + Send + Sync>> {
-        let placeholder = minimal_jpeg();
-        self.infer(&placeholder, prompt).await
-    }
-
-    pub fn model_name(&self) -> &str {
-        &self.model
-    }
-
-    // --- OpenAI-compatible inference ---
-
-    async fn infer_openai(
-        &self,
-        jpeg_bytes: &[u8],
-        prompt: &str,
-    ) -> Result<(String, f64), Box<dyn std::error::Error + Send + Sync>> {
         let img_b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_bytes);
         let data_url = format!("data:image/jpeg;base64,{}", img_b64);
 
-        let payload = OpenAIRequest {
+        let payload = ChatRequest {
             model: self.model.clone(),
-            messages: vec![OpenAIMessage {
+            messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: vec![
-                    OpenAIContent::ImageUrl {
+                    ContentPart::ImageUrl {
                         image_url: ImageUrl { url: data_url },
                     },
-                    OpenAIContent::Text {
+                    ContentPart::Text {
                         text: prompt.to_string(),
                     },
                 ],
@@ -175,22 +107,20 @@ impl VlmClient {
             .timeout(std::time::Duration::from_secs(120));
 
         if let Some(ref key) = self.api_key {
-            req = req.header("Authorization", format!("Bearer {}", key));
+            if !key.is_empty() {
+                req = req.bearer_auth(key);
+            }
         }
 
         let resp = req.send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            warn!(
-                "OpenAI API error {}: {}",
-                status,
-                &body[..body.len().min(300)]
-            );
+            warn!("VLM API error {}: {}", status, &body[..body.len().min(300)]);
             return Err(format!("VLM API returned {status}").into());
         }
 
-        let body: OpenAIResponse = resp.json().await?;
+        let body: ChatResponse = resp.json().await?;
         let elapsed = start.elapsed().as_secs_f64();
         let text = body
             .choices
@@ -199,67 +129,31 @@ impl VlmClient {
             .unwrap_or_default();
 
         info!(
-            "VLM inference (OpenAI) done in {:.2}s: {}",
+            "VLM inference done in {:.2}s: {}",
             elapsed,
             &text[..text.len().min(80)]
         );
         Ok((text, elapsed))
     }
 
-    // --- Ollama native inference ---
-
-    async fn infer_ollama(
+    /// Text-only inference using a tiny placeholder image.
+    #[allow(dead_code)]
+    pub async fn infer_text_only(
         &self,
-        jpeg_bytes: &[u8],
         prompt: &str,
     ) -> Result<(String, f64), Box<dyn std::error::Error + Send + Sync>> {
-        let img_b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_bytes);
-        let payload = OllamaRequest {
-            model: self.model.clone(),
-            prompt: prompt.to_string(),
-            images: vec![img_b64],
-            stream: false,
-            options: OllamaOptions {
-                num_predict: self.max_tokens,
-                temperature: self.temperature,
-            },
-        };
+        let placeholder = minimal_jpeg();
+        self.infer(&placeholder, prompt).await
+    }
 
-        let start = std::time::Instant::now();
-        let resp = self
-            .http
-            .post(&self.api_url)
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(120))
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            warn!(
-                "Ollama API error {}: {}",
-                status,
-                &body[..body.len().min(200)]
-            );
-            return Err(format!("VLM API returned {status}").into());
-        }
-
-        let body: OllamaResponse = resp.json().await?;
-        let elapsed = start.elapsed().as_secs_f64();
-        let text = body.response.unwrap_or_default().trim().to_string();
-        info!(
-            "VLM inference (Ollama) done in {:.2}s: {}",
-            elapsed,
-            &text[..text.len().min(80)]
-        );
-        Ok((text, elapsed))
+    pub fn model_name(&self) -> &str {
+        &self.model
     }
 }
 
 /// Minimal valid 1x1 JPEG for text-only VLM calls.
+#[allow(dead_code)]
 fn minimal_jpeg() -> Vec<u8> {
-    // A known-good minimal JPEG (1x1 grey pixel)
     vec![
         0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
         0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06,
@@ -284,7 +178,6 @@ impl std::fmt::Debug for VlmClient {
         f.debug_struct("VlmClient")
             .field("api_url", &self.api_url)
             .field("model", &self.model)
-            .field("format", &self.format)
             .finish()
     }
 }
