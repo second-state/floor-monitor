@@ -122,7 +122,8 @@ max_tokens = 200
 
 [telegram]
 # bot_token = "123456:ABC-DEF..."
-# chat_id = "12345678"
+# chat_id = "12345678"                 # single chat
+# chat_ids = ["12345678", "87654321"]  # or multiple chats
 
 # [asr]  # for Telegram voice messages (requires ffmpeg)
 # api_url = "https://api.openai.com/v1/audio/transcriptions"
@@ -209,6 +210,48 @@ api_url = "https://api.openai.com/v1/chat/completions"
 api_key = "sk-..."
 model = "gpt-4o-mini"
 ```
+
+## Telegram Bot Setup
+
+### 1. Create a bot
+
+Message [@BotFather](https://t.me/BotFather) on Telegram and send `/newbot`.
+Follow the prompts to get your **bot token** (e.g. `123456:ABC-DEF...`).
+
+### 2. Find your chat ID
+
+Send any message to your new bot, then open this URL in a browser
+(replace `<TOKEN>` with your bot token):
+
+```
+https://api.telegram.org/bot<TOKEN>/getUpdates
+```
+
+Look for `"chat":{"id":12345678,...}` in the JSON response. That number
+is your chat ID.
+
+For a **group chat**, add the bot to the group, send a message in the
+group, then check `getUpdates` again. Group chat IDs are negative numbers
+(e.g. `-1001234567890`).
+
+### 3. Configure
+
+```toml
+[telegram]
+bot_token = "123456:ABC-DEF..."
+chat_id = "12345678"
+```
+
+To send alerts and summaries to multiple people or groups:
+
+```toml
+[telegram]
+bot_token = "123456:ABC-DEF..."
+chat_ids = ["12345678", "-1001234567890"]
+```
+
+The bot sends alerts, summaries, and replies to all listed chats.
+Only messages from those chats are accepted — others are ignored.
 
 ## API Reference
 

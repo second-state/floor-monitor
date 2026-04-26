@@ -39,7 +39,11 @@ pub struct VlmConfig {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct TelegramConfig {
     pub bot_token: Option<String>,
+    /// Single chat ID (for backward compatibility). Use `chat_ids` for multiple.
     pub chat_id: Option<String>,
+    /// List of chat IDs to send alerts/summaries to and accept messages from.
+    #[serde(default)]
+    pub chat_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

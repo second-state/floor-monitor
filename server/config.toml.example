@@ -28,9 +28,13 @@ max_tokens = 200
 # temperature = 0.1  # optional; omit to use provider default
 
 # Optional: Telegram bot for alerts and Q&A
+# The bot sends alerts, summaries, and replies to all listed chat IDs,
+# and only accepts incoming messages from those chats.
+# You can use either chat_id (single) or chat_ids (multiple), or both.
 [telegram]
 # bot_token = "123456:ABC-DEF..."
-# chat_id = "12345678"
+# chat_id = "12345678"               # single chat
+# chat_ids = ["12345678", "87654321"] # multiple chats
 
 # Optional: ASR (speech-to-text) for Telegram voice messages
 # Requires ffmpeg installed for OGG-to-WAV conversion.

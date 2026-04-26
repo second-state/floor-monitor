@@ -9,11 +9,12 @@ use crate::state::AppState;
 const API_BASE: &str = "https://api.telegram.org/bot";
 const POLL_TIMEOUT: u64 = 25;
 
-/// Telegram notifier — send text messages and photos.
+/// Telegram notifier — send text messages and photos to one or more chats.
 #[derive(Debug, Clone)]
 pub struct TelegramNotifier {
     bot_token: String,
-    chat_id: String,
+    /// All chat IDs to send messages to and accept incoming messages from.
+    chat_ids: Vec<i64>,
     http: reqwest::Client,
 }
 
@@ -65,88 +66,127 @@ struct FileInfo {
 }
 
 impl TelegramNotifier {
-    pub fn new(bot_token: String, chat_id: String) -> Self {
-        Self {
-            bot_token,
-            chat_id,
-            http: reqwest::Client::new(),
-        }
-    }
-
     pub fn from_config(config: &crate::config::TelegramConfig) -> Option<Self> {
         let token = config.bot_token.as_deref()?.trim();
-        let chat = config.chat_id.as_deref()?.trim();
-        if token.is_empty() || chat.is_empty() {
+        if token.is_empty() {
             return None;
         }
-        Some(Self::new(token.to_string(), chat.to_string()))
+
+        // Merge chat_id (singular) and chat_ids (list) into one deduplicated list
+        let mut ids: Vec<i64> = Vec::new();
+        if let Some(ref single) = config.chat_id {
+            if let Ok(id) = single.trim().parse::<i64>() {
+                ids.push(id);
+            }
+        }
+        for s in &config.chat_ids {
+            if let Ok(id) = s.trim().parse::<i64>() {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        if ids.is_empty() {
+            return None;
+        }
+
+        info!(
+            "Telegram notifier enabled for {} chat(s): {:?}",
+            ids.len(),
+            ids
+        );
+        Some(Self {
+            bot_token: token.to_string(),
+            chat_ids: ids,
+            http: reqwest::Client::new(),
+        })
     }
 
     fn api_url(&self, method: &str) -> String {
         format!("{}{}/{}", API_BASE, self.bot_token, method)
     }
 
+    /// Send a text message to all configured chats.
     pub async fn send(&self, text: &str) -> bool {
-        let payload = serde_json::json!({
-            "chat_id": self.chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-        });
-        match self
-            .http
-            .post(self.api_url("sendMessage"))
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await
-        {
-            Ok(resp) => resp
-                .json::<TelegramApiResult>()
+        let mut any_ok = false;
+        for chat_id in &self.chat_ids {
+            let payload = serde_json::json!({
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "Markdown",
+            });
+            match self
+                .http
+                .post(self.api_url("sendMessage"))
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
                 .await
-                .map(|r| r.ok)
-                .unwrap_or(false),
-            Err(e) => {
-                warn!("Telegram send failed: {}", e);
-                false
+            {
+                Ok(resp) => {
+                    if resp
+                        .json::<TelegramApiResult>()
+                        .await
+                        .map(|r| r.ok)
+                        .unwrap_or(false)
+                    {
+                        any_ok = true;
+                    }
+                }
+                Err(e) => {
+                    warn!("Telegram send to {} failed: {}", chat_id, e);
+                }
             }
         }
+        any_ok
     }
 
+    /// Send a photo to all configured chats.
     pub async fn send_photo(&self, jpeg_bytes: Vec<u8>, caption: &str) -> bool {
-        let part = multipart::Part::bytes(jpeg_bytes)
-            .file_name("frame.jpg")
-            .mime_str("image/jpeg")
-            .unwrap();
-        let mut form = multipart::Form::new()
-            .text("chat_id", self.chat_id.clone())
-            .part("photo", part);
-        if !caption.is_empty() {
-            form = form
-                .text("caption", caption[..caption.len().min(1024)].to_string())
-                .text("parse_mode", "Markdown");
-        }
-        match self
-            .http
-            .post(self.api_url("sendPhoto"))
-            .multipart(form)
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await
-        {
-            Ok(resp) => resp
-                .json::<TelegramApiResult>()
+        let mut any_ok = false;
+        let cap: String = caption.chars().take(1024).collect();
+        for chat_id in &self.chat_ids {
+            let part = multipart::Part::bytes(jpeg_bytes.clone())
+                .file_name("frame.jpg")
+                .mime_str("image/jpeg")
+                .unwrap();
+            let mut form = multipart::Form::new()
+                .text("chat_id", chat_id.to_string())
+                .part("photo", part);
+            if !cap.is_empty() {
+                form = form
+                    .text("caption", cap.clone())
+                    .text("parse_mode", "Markdown");
+            }
+            match self
+                .http
+                .post(self.api_url("sendPhoto"))
+                .multipart(form)
+                .timeout(std::time::Duration::from_secs(20))
+                .send()
                 .await
-                .map(|r| r.ok)
-                .unwrap_or(false),
-            Err(e) => {
-                warn!("Telegram send_photo failed: {}", e);
-                false
+            {
+                Ok(resp) => {
+                    if resp
+                        .json::<TelegramApiResult>()
+                        .await
+                        .map(|r| r.ok)
+                        .unwrap_or(false)
+                    {
+                        any_ok = true;
+                    }
+                }
+                Err(e) => {
+                    warn!("Telegram send_photo to {} failed: {}", chat_id, e);
+                }
             }
         }
+        any_ok
     }
 
-    pub fn chat_id_i64(&self) -> i64 {
-        self.chat_id.parse().unwrap_or(0)
+    /// Check if a chat ID is in the allowed list.
+    pub fn is_allowed_chat(&self, chat_id: i64) -> bool {
+        self.chat_ids.contains(&chat_id)
     }
 
     /// Download a file from Telegram by file_id (e.g. voice messages).
@@ -218,7 +258,7 @@ pub fn start_listener(state: Arc<AppState>, notifier: Arc<TelegramNotifier>) {
                     for upd in updates {
                         offset = Some(upd.update_id + 1);
                         if let Some(msg) = upd.message {
-                            if msg.chat.id != notifier.chat_id_i64() {
+                            if !notifier.is_allowed_chat(msg.chat.id) {
                                 continue;
                             }
 
