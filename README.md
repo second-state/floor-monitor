@@ -7,8 +7,8 @@ high-priority alerts and periodic summaries via Telegram.
 
 **Key design:** the server never touches cameras directly. It receives JPEG frames
 over WebSocket from one or more camera clients, which can run on the same machine
-or anywhere on the network.
-
+or anywhere on the network. All AI backends (VLM, LLM, ASR) are accessed through
+OpenAI-compatible APIs — the server itself loads no models.
 
 ## Architecture
 
@@ -26,18 +26,21 @@ or anywhere on the network.
 
 ## Features
 
-- **Generic VLM/LLM backend** — Any OpenAI-compatible `/v1/chat/completions` endpoint
-  (vLLM, OpenAI, Ollama via its OpenAI endpoint, etc.).
+- **Generic VLM/LLM backend** — Any OpenAI-compatible `/v1/chat/completions`
+  endpoint. No vendor lock-in.
 - **Monitor profiles** — Domain-specific structured JSON prompts: Kid, Office,
   Retail Store, Home Security. Alerts on high-risk frames; periodic summaries.
 - **Web dashboard** — Live camera preview, streaming analysis results via SSE.
   All HTML/CSS/JS in editable template files — no Rust recompile needed.
-- **Telegram bot** — `/snapshot`, `/status`, `/help`, and free-form visual
-  questions about the live feed.
+- **Telegram bot** — Text and voice messages. Voice transcribed via ASR.
+  LLM-based intent classification routes to visual Q&A, snapshots, PTZ control,
+  patrol, history summaries.
+- **Camera control** — Server sends PTZ and patrol commands to capable cameras
+  via WebSocket. Cameras report capabilities on registration; fixed cameras
+  (e.g. Mac webcam) are never sent movement commands.
 - **Dual camera clients** — Python (USB + RTSP) and Rust (USB only), sharing
   the same `camera.toml` config format.
-- **Multi-camera** — Multiple camera clients can connect to a single server
-  simultaneously.
+- **Multi-camera** — Multiple camera clients can connect simultaneously.
 
 ## Quick Start
 
@@ -45,38 +48,35 @@ or anywhere on the network.
 
 - Rust 1.75+ (for the server)
 - Python 3.11+ (for the Python camera client)
-- A VLM backend serving an OpenAI-compatible `/v1/chat/completions` endpoint.
-  Options: [vLLM](https://github.com/vllm-project/vllm),
-  [Ollama](https://ollama.com) (with its OpenAI-compatible endpoint),
-  OpenAI API, or any compatible provider.
+- An OpenAI-compatible VLM endpoint (see [Local Inference](#local-inference) below)
 
-### 1. Start a VLM backend
-
-```bash
-# Option A: vLLM with Qwen (recommended for local)
-pip install vllm
-vllm serve Qwen/Qwen2.5-VL-3B-Instruct
-
-# Option B: Ollama (use its OpenAI-compatible endpoint)
-ollama pull qwen2.5-vl:3b
-ollama serve
-# Then set api_url = "http://localhost:11434/v1/chat/completions" in config.toml
-```
-
-### 2. Build and start the server
+### 1. Build and start the server
 
 ```bash
 cd server
 cp config.toml.example config.toml
-# Edit config.toml — set your VLM endpoint, Telegram tokens, etc.
+```
 
+Edit `config.toml` — point `[vlm]` at your OpenAI-compatible endpoint:
+
+```toml
+[vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+model = "Qwen/Qwen2.5-VL-3B-Instruct"
+max_tokens = 200
+temperature = 0.1
+```
+
+Build and run:
+
+```bash
 cargo build --release
 ./target/release/floor-monitor-server
 ```
 
 The server starts on `http://0.0.0.0:3456` by default.
 
-### 3. Start a camera client
+### 2. Start a camera client
 
 **Python (recommended — supports USB and RTSP cameras):**
 
@@ -99,7 +99,7 @@ cargo build --release
 ./target/release/floor-monitor-camera ../camera.toml
 ```
 
-### 4. Open the dashboard
+### 3. Open the dashboard
 
 Browse to [http://127.0.0.1:3456/dashboard](http://127.0.0.1:3456/dashboard).
 Analysis results stream in real-time as the camera client sends frames.
@@ -114,15 +114,9 @@ host = "0.0.0.0"
 port = 3456
 
 [vlm]
-# vLLM with Qwen
 api_url = "http://localhost:8000/v1/chat/completions"
 model = "Qwen/Qwen2.5-VL-3B-Instruct"
-
-# Or OpenAI cloud
-# api_url = "https://api.openai.com/v1/chat/completions"
-# api_key = "sk-..."
-# model = "gpt-4o-mini"
-
+# api_key = "sk-..."   # if your endpoint requires authentication
 max_tokens = 200
 temperature = 0.1
 
@@ -130,12 +124,12 @@ temperature = 0.1
 # bot_token = "123456:ABC-DEF..."
 # chat_id = "12345678"
 
-# [asr]
+# [asr]  # for Telegram voice messages (requires ffmpeg)
 # api_url = "https://api.openai.com/v1/audio/transcriptions"
 # api_key = "sk-..."
 # model = "whisper-1"
 
-# [llm]
+# [llm]  # for intent classification (without this, keyword matching is used)
 # api_url = "http://localhost:8000/v1/chat/completions"
 # model = "Qwen/Qwen2.5-3B-Instruct"
 
@@ -146,7 +140,8 @@ alert_consecutive = 2
 alert_cooldown_sec = 120
 ```
 
-All API sections (`[vlm]`, `[llm]`, `[asr]`) use OpenAI-compatible endpoints.
+All API sections (`[vlm]`, `[llm]`, `[asr]`) use standard OpenAI-compatible
+endpoints. See `config.toml.example` for full documentation.
 
 ### Camera (`camera/camera.toml`)
 
@@ -163,9 +158,56 @@ device_index = 0            # for local cameras
 interval = 2.0
 max_dimension = 768
 jpeg_quality = 85
+# capabilities = ["ptz", "patrol"]  # for PTZ-capable cameras
 ```
 
 Both Python and Rust camera clients read this same file.
+
+## Local Inference
+
+The server works with any OpenAI-compatible `/v1/chat/completions` endpoint.
+For local (on-device) inference, you can use:
+
+### vLLM
+
+```bash
+pip install vllm
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct
+```
+
+Then set in `config.toml`:
+```toml
+[vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+model = "Qwen/Qwen2.5-VL-3B-Instruct"
+```
+
+### Ollama
+
+Ollama exposes an OpenAI-compatible endpoint alongside its native API.
+
+```bash
+ollama pull qwen2.5-vl:3b
+ollama serve
+```
+
+Then set in `config.toml`:
+```toml
+[vlm]
+api_url = "http://localhost:11434/v1/chat/completions"
+model = "qwen2.5-vl:3b"
+```
+
+### Cloud providers
+
+Any OpenAI-compatible cloud endpoint works (OpenAI, Together, Groq, etc.):
+
+```toml
+[vlm]
+api_url = "https://api.openai.com/v1/chat/completions"
+api_key = "sk-..."
+model = "gpt-4o-mini"
+```
 
 ## API Reference
 
@@ -173,7 +215,7 @@ Both Python and Rust camera clients read this same file.
 |---|---|---|
 | `/dashboard` | GET | Web UI dashboard |
 | `/ws` | WebSocket | Camera client connection |
-| `/api/cameras` | GET | JSON list of connected cameras |
+| `/api/cameras` | GET | JSON list of connected cameras (includes capabilities) |
 | `/api/results` | GET | Recent analysis results (all cameras) |
 | `/api/snapshot/{camera_id}` | GET | Latest JPEG frame for a camera |
 | `/api/events` | GET (SSE) | Server-Sent Events stream for live updates |
@@ -182,7 +224,7 @@ Both Python and Rust camera clients read this same file.
 
 **Camera → Server:**
 ```json
-{"type": "register", "camera_id": "cam1", "name": "Living Room"}
+{"type": "register", "camera_id": "cam1", "name": "Living Room", "capabilities": ["ptz", "patrol"]}
 {"type": "frame", "camera_id": "cam1", "jpeg_b64": "<base64>"}
 ```
 Or send raw JPEG as a binary WebSocket message (after registration).
@@ -191,6 +233,7 @@ Or send raw JPEG as a binary WebSocket message (after registration).
 ```json
 {"type": "registered", "camera_id": "cam1"}
 {"type": "result", "camera_id": "cam1", "frame_no": 42, "text": "...", "infer_secs": 1.23}
+{"type": "command", "camera_id": "cam1", "action": "ptz", "params": {"direction": "pan_left"}}
 ```
 
 ## Monitor Profiles
