@@ -78,7 +78,7 @@
                     <td>Profiles</td>
                     <td>
                         {% for p in profiles %}
-                        <span class="tag">{{ p.name }}</span>
+                        <span class="tag {% if p.id == active_profile %}tag-active{% endif %}">{{ p.name }}</span>
                         {% endfor %}
                     </td>
                 </tr>

@@ -167,11 +167,17 @@ main {
 .tag {
     display: inline-block;
     font-size: 0.75rem;
-    background: var(--accent-light);
-    color: var(--accent);
+    background: var(--bg);
+    color: var(--text-muted);
     padding: 0.1rem 0.4rem;
     border-radius: 3px;
     margin: 0.1rem;
+}
+
+.tag-active {
+    background: var(--accent);
+    color: white;
+    font-weight: 600;
 }
 
 /* Results */

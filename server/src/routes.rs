@@ -69,6 +69,7 @@ pub async fn dashboard(
     ctx.insert("cameras", &camera_list);
     ctx.insert("results", &all_results);
     ctx.insert("profiles", &profiles);
+    ctx.insert("active_profile", &state.config.monitor.default_profile);
     ctx.insert("model", state.vlm.model_name());
     ctx.insert(
         "ws_url",
