@@ -20,59 +20,142 @@ Always run `cargo fmt --all` before `cargo clippy`. Clippy sometimes reports sty
 
 Clippy enforces `doc-lazy-continuation` — multi-line doc comments must have consistent indentation for continuation lines. Keep doc comments on a single line or properly indent continuations.
 
-## WebSocket Protocol
+## OpenAI-Compatible API
 
-### Message Types
+### All Endpoints Are OpenAI Format
 
-The camera-to-server WebSocket protocol supports two frame delivery methods:
-1. **JSON text messages** with base64-encoded JPEG (`{"type":"frame","camera_id":"...","jpeg_b64":"..."}`)
-2. **Binary messages** — raw JPEG bytes (camera must be registered first; the server associates binary frames with the most recently registered camera on that connection)
+All API sections (`[vlm]`, `[llm]`, `[asr]`) use the standard OpenAI API format exclusively. There is no Ollama-native or other proprietary format support. If using Ollama, point to its OpenAI-compatible endpoint (`http://localhost:11434/v1/chat/completions`).
 
-### Camera Registration
-
-A camera must send a `{"type":"register","camera_id":"...","name":"..."}` message before sending frames. The server acknowledges with `{"type":"registered","camera_id":"..."}`. Without registration, frames are dropped.
-
-### Connection Lifecycle
-
-When a WebSocket disconnects, the server marks the camera as `running: false` but retains its state (frames, results). This allows the dashboard to show historical data and the camera to reconnect without losing context.
-
-## VLM Integration
-
-### OpenAI-Compatible API Only
-
-All API sections (`[vlm]`, `[llm]`, `[asr]`) use the standard OpenAI API format exclusively. There is no Ollama-native format support. If using Ollama, point to its OpenAI-compatible endpoint (`http://localhost:11434/v1/chat/completions`).
-
-### OpenAI Vision Format
+### VLM Vision Format
 
 Images are sent as base64 data URLs in the `content` array:
 ```json
 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
 ```
-
 Not all OpenAI-compatible servers support vision. Ensure your model supports image input.
 
-### Text-Only VLM Calls
+### API Key Handling
 
-For summary generation (no image needed), we send a 1x1 grey JPEG placeholder. VLMs require an image input even for text-only tasks. The prompt instructs the model to ignore the image.
+All three sections (`[vlm]`, `[llm]`, `[asr]`) accept an optional `api_key`. When present and non-empty, it's sent as `Authorization: Bearer <key>`. When absent, no auth header is sent. This allows both authenticated cloud endpoints and local servers that need no auth.
 
-### Inference Timeout
+### Temperature Is Optional
 
-Both OpenAI and Ollama calls use a 120-second timeout. Large models on slow hardware may need this entire window. The server sends the result back to the camera client only after inference completes — there's no streaming.
+The `temperature` field in `[vlm]` and `[llm]` is `Option<f32>`. When omitted, the field is not sent in the API request (via `skip_serializing_if`), letting the provider use its default. This is important because some providers (e.g. OpenAI reasoning models) have deprecated user-set temperatures.
+
+### max_tokens
+
+`max_tokens` limits VLM/LLM response length in tokens. For structured JSON monitor output, 200 is sufficient. For intent classification, 150 is enough. Lower values = faster response and lower cost on cloud APIs. The server processes every frame, so keeping this low matters for throughput.
+
+### Invalid JSON Responses
+
+VLM and LLM clients read the HTTP response as text first, then parse with `serde_json::from_str`. If the provider returns a 200 with non-JSON body (HTML error page, malformed response), the error is logged with a truncated body snippet and returned as `Err` — never a panic. String truncation uses `.chars().take(N)` to prevent panics on multi-byte UTF-8.
+
+## WebSocket Protocol
+
+### Message Types
+
+Camera-to-server:
+- `register` — `{camera_id, name, capabilities}` — camera announces itself
+- `frame` — `{camera_id, jpeg_b64}` — base64-encoded JPEG frame
+- Binary message — raw JPEG bytes (after registration)
+- `command_ack` — `{camera_id, action, success, message}` — acknowledge a command
+
+Server-to-camera:
+- `registered` — `{camera_id}` — acknowledge registration
+- `result` — `{camera_id, frame_no, text, infer_secs}` — VLM inference result
+- `command` — `{camera_id, action, params}` — PTZ or patrol command
+- `error` — `{message}` — error message
+
+### Camera Capabilities
+
+Cameras report capabilities on registration (e.g. `["ptz", "patrol"]`). The server stores these in `CameraState.capabilities`. When the Telegram bot dispatches a PTZ or patrol command via `send_command_to_any_camera()`, it first looks for a camera with the matching capability. If no camera supports the requested action, a clear error is returned. Fixed cameras (Mac webcam, RTSP without PTZ) register with empty capabilities and are never sent movement commands.
+
+### Command Channel Architecture
+
+Each camera has an `mpsc::UnboundedSender<String>` stored in `CameraState.cmd_tx`. On WebSocket connection, a forwarding task spawns that reads from the channel and writes to the WebSocket. This allows any part of the server (Telegram handler, API endpoint) to send commands to a specific camera without holding the WebSocket sender directly. On disconnect, `cmd_tx` is set to `None`.
+
+### Connection Lifecycle
+
+When a WebSocket disconnects, the server marks the camera as `running: false` and sets `cmd_tx: None`, but retains the camera state (frames, results). This allows the dashboard to show historical data and the camera to reconnect without losing context.
 
 ## Monitor Profiles
 
+### External TOML Files
+
+Profiles are loaded from `server/profiles/*.toml` at startup. Each file defines `id`, `name`, `prompt`, `summary_intro`, and `danger_categories`. To add a new profile, drop a `.toml` file in the directory and set `default_profile` in config. No recompilation needed.
+
+### Fallback Defaults
+
+If the `profiles/` directory doesn't exist or is empty, the server falls back to built-in default profiles (kid, security). The external files are the canonical source; the built-in defaults are a safety net.
+
 ### JSON Parsing Tolerance
 
-VLM output is not always clean JSON. The parser:
+VLM output is not always clean JSON. The `parse_vlm_json` function:
 1. Tries `serde_json::from_str` on the full text
 2. Falls back to finding the first `{...}` block via string search
-3. Returns `None` if neither works
-
-This handles common VLM quirks: leading/trailing text, markdown code fences, explanatory prose around the JSON.
+3. Returns `None` if neither works — never panics
 
 ### Risk Level Normalization
 
 The `risk_level` field is normalized to lowercase and must be one of: `none`, `low`, `medium`, `high`. Any other value defaults to `none`. This prevents VLM hallucinations from triggering false alerts.
+
+## Alert Pipeline
+
+### How Alerts Fire
+
+`AlertTracker` counts consecutive frames where `risk_level` is `"high"` or `"medium"`. When the count reaches `alert_consecutive` (default 2), an `AlertEvent` is sent via `mpsc` channel. A consumer task in `main.rs` sends the alert to all Telegram chats with the frame photo.
+
+### Cooldown
+
+After an alert fires for a camera, a per-camera cooldown (`alert_cooldown_sec`, default 120) prevents repeated alerts for the same ongoing situation.
+
+### Summary Scheduler
+
+A background `tokio::spawn` task fires every `summary_window_min` minutes. It collects recent frame results, builds a text digest, and calls `vlm.infer_text_only()` with the profile's `summary_intro` to generate a natural-language summary. The summary is pushed to all Telegram chats.
+
+## Telegram Bot
+
+### Multi-Chat Support
+
+The `[telegram]` config supports both `chat_id` (single, string) and `chat_ids` (list of strings). Both are merged and deduplicated at startup. All messages (alerts, summaries, replies) are sent to every configured chat. Only incoming messages from listed chats are processed; others are silently dropped.
+
+### Voice Messages
+
+Voice messages (OGG files) are handled by:
+1. Downloading via Telegram `getFile` API → file URL → raw bytes
+2. Converting OGG to 16kHz mono WAV via `ffmpeg` (temp files with UUID names)
+3. Sending WAV to the ASR endpoint (Whisper-compatible multipart POST)
+4. Feeding the transcribed text through the normal message handler
+
+If ffmpeg is not installed or conversion fails, the original OGG is sent to the ASR endpoint as a fallback.
+
+### Intent Classification
+
+When `[llm]` is configured, incoming text (or transcribed voice) is classified by the LLM into an `Intent` enum: `VisualQuestion`, `HistorySummary`, `Snapshot`, `Patrol`, `PtzControl`, `Help`, `Status`. The LLM is prompted to output a single-line JSON, which is parsed tolerantly (strips code fences, finds first `{...}` block).
+
+When `[llm]` is not configured, the bot falls back to keyword matching (`/help`, `/snapshot`, `pan left`, etc.).
+
+### Reactive Only
+
+The Telegram bot only responds to incoming messages. It does not stream frames or analysis results. The only proactive behaviors are alerts (from the alert pipeline) and periodic summaries (from the summary scheduler).
+
+## Camera Clients
+
+### Shared Config Format
+
+Both Python and Rust camera clients read the same `camera.toml` file (TOML format). The Python client supports both local and RTSP cameras; the Rust client currently supports local cameras only.
+
+### Capabilities
+
+The `capabilities` field in `camera.toml` is an optional list of strings (e.g. `["ptz", "patrol"]`). It's sent during WebSocket registration and determines whether the server will route movement commands to this camera. Fixed cameras should omit this field or set it to `[]`.
+
+### Command Handling
+
+After receiving an inference result, camera clients poll for pending command messages with a short timeout. Commands have `action` ("ptz", "patrol") and `params` (e.g. `{"direction": "pan_left"}`). The client sends a `command_ack` response. The Python client logs commands but does not implement actual motor control — that depends on the camera hardware.
+
+### Reconnection
+
+Both clients implement auto-reconnect with a 5-second backoff. On reconnect, the camera re-registers with its capabilities.
 
 ## Testing
 
@@ -84,32 +167,18 @@ To test with a real VLM, set `FLOOR_MONITOR_E2E_VLM=1` and configure `FLOOR_MONI
 
 ### Test JPEG Images
 
-Tests use pre-encoded minimal JPEG byte arrays (2x2 pixels) rather than runtime image generation. This avoids pulling in image encoding dependencies in tests and keeps test startup fast.
+Tests use pre-encoded minimal JPEG byte arrays (2x2 pixels) rather than runtime image generation. This keeps test startup fast and avoids image-crate dependencies in tests.
 
 ### Template Directory Resolution
 
-Tests may run from the `server/` directory or the repo root. The template loader tries both `templates/` and `server/templates/` paths. In CI, always `cd server` before running tests.
-
-## Camera Clients
-
-### Shared Config Format
-
-Both Python and Rust camera clients read the same `camera.toml` file (TOML format). This ensures config portability. The Python client supports both local and RTSP cameras; the Rust client currently supports local cameras only (RTSP requires FFmpeg bindings not included).
-
-### RTSP Buffer Draining
-
-OpenCV's FFmpeg backend buffers ~5 decoded RTSP frames. After camera movement (PTZ), the next few `read()` calls return stale pre-movement frames. The Python client's `grab_fresh_frame()` drains the buffer by calling `grab()` multiple times before `retrieve()`. The Rust client doesn't implement this yet.
-
-### Reconnection
-
-Both clients implement auto-reconnect with a 5-second backoff. If the server goes down, the camera client keeps retrying. On reconnect, the camera re-registers — the server creates or updates the camera state.
+Tests may run from the `server/` directory or the repo root. The template loader tries both `templates/` and `server/templates/` paths. The profile loader similarly tries both `profiles/` and `server/profiles/`. In CI, always `cd server` before running tests.
 
 ## CI
 
 ### ARM Linux Runners
 
-CI uses `ubuntu-24.04-arm` runners. The `nokhwa` crate (camera capture in the Rust client) may require system libraries (`v4l2`, `libclang`) on Linux that aren't available in CI. The CI only builds/tests the server, not the Rust camera client.
+CI uses `ubuntu-24.04-arm` runners. The server build and all tests run on ARM. The Rust camera client (`nokhwa` crate) may require system libraries on Linux that aren't available in CI, so CI only builds/tests the server.
 
 ### Rust Cache
 
-CI uses `Swatinem/rust-cache@v2` with `workspaces: server` to cache only the server's target directory. This avoids caching the camera client's separate target directory.
+CI uses `Swatinem/rust-cache@v2` with `workspaces: server` to cache only the server's target directory.

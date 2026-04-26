@@ -95,7 +95,9 @@ impl AppState {
         let llm = LlmClient::new(&config.llm).map(Arc::new);
         let (events_tx, _) = broadcast::channel(256);
         let (alert_tx, alert_rx) = mpsc::unbounded_channel();
-        let monitor_profiles = Arc::new(crate::monitor::default_profiles());
+        // Load profiles from external TOML files; fall back to built-in defaults
+        let profiles_dir = std::path::Path::new("profiles");
+        let monitor_profiles = Arc::new(crate::monitor::load_profiles(profiles_dir));
         let alert_tracker = Arc::new(Mutex::new(AlertTracker::new(&config.monitor)));
         let notifier = TelegramNotifier::from_config(&config.telegram).map(Arc::new);
 

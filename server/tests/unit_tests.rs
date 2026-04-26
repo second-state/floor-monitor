@@ -55,8 +55,16 @@ fn test_extract_risk_level_missing() {
 }
 
 #[test]
-fn test_default_profiles_exist() {
-    let profiles = floor_monitor_server::monitor::default_profiles();
+fn test_load_profiles_from_directory() {
+    // Try loading from the real profiles/ directory
+    let dir = std::path::Path::new("profiles");
+    let profiles = if dir.is_dir() {
+        floor_monitor_server::monitor::load_profiles(dir)
+    } else {
+        // Fallback for running from repo root
+        let alt = std::path::Path::new("server/profiles");
+        floor_monitor_server::monitor::load_profiles(alt)
+    };
     assert!(profiles.contains_key("kid"));
     assert!(profiles.contains_key("office"));
     assert!(profiles.contains_key("retail"));
@@ -64,8 +72,22 @@ fn test_default_profiles_exist() {
 }
 
 #[test]
+fn test_fallback_default_profiles() {
+    // Loading from a nonexistent directory should return built-in defaults
+    let profiles =
+        floor_monitor_server::monitor::load_profiles(std::path::Path::new("nonexistent_dir"));
+    assert!(!profiles.is_empty());
+    assert!(profiles.contains_key("kid"));
+}
+
+#[test]
 fn test_profile_prompts_non_empty() {
-    let profiles = floor_monitor_server::monitor::default_profiles();
+    let dir = std::path::Path::new("profiles");
+    let profiles = if dir.is_dir() {
+        floor_monitor_server::monitor::load_profiles(dir)
+    } else {
+        floor_monitor_server::monitor::load_profiles(std::path::Path::new("server/profiles"))
+    };
     for (id, profile) in &profiles {
         assert!(
             !profile.prompt.is_empty(),

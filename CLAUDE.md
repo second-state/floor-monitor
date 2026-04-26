@@ -132,14 +132,19 @@ floor-monitor/
 │   │   ├── lib.rs             # Public modules (for tests)
 │   │   ├── config.rs          # TOML config loading
 │   │   ├── state.rs           # Shared AppState, FrameResult, CameraState
-│   │   ├── vlm.rs             # VLM client (OpenAI + Ollama)
+│   │   ├── vlm.rs             # VLM client (OpenAI-compatible)
 │   │   ├── llm.rs             # LLM intent classifier
 │   │   ├── asr.rs             # ASR client (Whisper-compatible)
 │   │   ├── alert.rs           # Alert tracker + pipeline
 │   │   ├── ws.rs              # WebSocket handler + command channel
 │   │   ├── routes.rs          # HTTP routes (dashboard, API, SSE)
-│   │   ├── monitor.rs         # Monitor profiles, JSON parsing
+│   │   ├── monitor.rs         # Profile loader + JSON parsing
 │   │   └── telegram.rs        # Telegram bot (text + voice)
+│   ├── profiles/              # Monitor profiles (editable TOML)
+│   │   ├── kid.toml
+│   │   ├── office.toml
+│   │   ├── retail.toml
+│   │   └── security.toml
 │   ├── templates/             # Tera HTML templates
 │   │   ├── base.html
 │   │   └── dashboard.html

@@ -282,16 +282,56 @@ Or send raw JPEG as a binary WebSocket message (after registration).
 
 ## Monitor Profiles
 
-| Profile | Focus | Alert Examples |
-|---|---|---|
-| **Kid Monitor** | Child safety | Roughhousing, climbing, near windows, playing with outlets/sharp objects |
-| **Office Monitor** | Workplace safety | Injury, conflict, fire/smoke, intruders |
-| **Retail Store** | Operations | Unattended customers, staff negligence, cleanliness, conflicts |
-| **Home Security** | Intrusion/safety | Strangers, forced entry, fire, glass breakage |
+Profiles are VLM prompts stored as TOML files in `server/profiles/`. Each
+profile tells the VLM how to analyze a frame for a specific domain.
 
-Each profile instructs the VLM to output structured JSON with `activity`,
-`risk_level`, and `risk_reason` fields. High-risk detections trigger Telegram
-alerts after N consecutive frames (configurable).
+### Built-in profiles
+
+| Profile | File | Focus |
+|---|---|---|
+| Kid Monitor | `profiles/kid.toml` | Child safety — roughhousing, climbing, sharp objects |
+| Office Monitor | `profiles/office.toml` | Workplace — injury, conflict, fire, intruders |
+| Retail Store | `profiles/retail.toml` | Operations — unattended customers, cleanliness |
+| Home Security | `profiles/security.toml` | Intrusion — strangers, forced entry, fire |
+
+### Profile format
+
+Each `.toml` file contains:
+
+```toml
+id = "my-profile"                  # unique ID, referenced in config.toml
+name = "My Custom Profile"         # display name
+danger_categories = ["fire", "intruder"]  # high-risk categories
+
+summary_intro = """
+Instructions for generating periodic activity summaries."""
+
+prompt = """
+Instructions for the VLM. Must tell it to output structured JSON with
+at least: activity, risk_level, risk_reason fields."""
+```
+
+### Creating a custom profile
+
+1. Copy an existing profile: `cp profiles/kid.toml profiles/warehouse.toml`
+2. Edit the `id`, `name`, `prompt`, `summary_intro`, and `danger_categories`
+3. Set `default_profile = "warehouse"` in `config.toml`
+4. Restart the server — no recompilation needed
+
+### Selecting a profile
+
+```toml
+[monitor]
+default_profile = "kid"   # must match the id field in a profiles/*.toml file
+```
+
+### How alerts work
+
+Each profile's `prompt` instructs the VLM to output JSON with `risk_level`
+(`"none"`, `"low"`, `"medium"`, `"high"`) and `risk_reason` fields. When
+the server sees N consecutive high-risk frames (configurable via
+`alert_consecutive`), it sends a Telegram alert with the frame photo.
+A per-camera cooldown (`alert_cooldown_sec`) prevents alert spam.
 
 ## Development
 
