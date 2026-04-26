@@ -9,15 +9,6 @@ high-priority alerts and periodic summaries via Telegram.
 over WebSocket from one or more camera clients, which can run on the same machine
 or anywhere on the network.
 
-## Screenshots
-
-**Web UI — live preview + structured per-frame VLM output**
-
-![Web UI](docs/webui.png)
-
-**Telegram bot — ask questions, request a snapshot, or a recent-activity summary**
-
-![Telegram bot](docs/telegram.jpg)
 
 ## Architecture
 
