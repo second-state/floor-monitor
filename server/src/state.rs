@@ -35,6 +35,8 @@ pub struct CameraState {
     pub running: bool,
     /// Channel for sending commands to this camera via WebSocket.
     pub cmd_tx: Option<mpsc::UnboundedSender<String>>,
+    /// Capabilities reported by the camera on registration (e.g. "ptz", "patrol").
+    pub capabilities: Vec<String>,
 }
 
 impl CameraState {
@@ -47,7 +49,13 @@ impl CameraState {
             results: Vec::new(),
             running: false,
             cmd_tx: None,
+            capabilities: Vec::new(),
         }
+    }
+
+    /// Check if this camera supports a given capability.
+    pub fn has_capability(&self, cap: &str) -> bool {
+        self.capabilities.iter().any(|c| c == cap)
     }
 }
 

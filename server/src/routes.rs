@@ -43,6 +43,7 @@ pub async fn dashboard(
                 "name": c.name,
                 "running": c.running,
                 "frame_no": c.frame_no,
+                "capabilities": c.capabilities,
             })
         })
         .collect();
@@ -90,6 +91,7 @@ pub async fn api_cameras(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "name": c.name,
                 "running": c.running,
                 "frame_no": c.frame_no,
+                "capabilities": c.capabilities,
             })
         })
         .collect();

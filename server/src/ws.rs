@@ -26,7 +26,12 @@ pub async fn ws_handler(
 #[serde(tag = "type")]
 enum CameraMessage {
     #[serde(rename = "register")]
-    Register { camera_id: String, name: String },
+    Register {
+        camera_id: String,
+        name: String,
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
     #[serde(rename = "frame")]
     Frame { camera_id: String, jpeg_b64: String },
     #[serde(rename = "command_ack")]
@@ -86,17 +91,31 @@ pub async fn send_camera_command(
     tx.send(json).map_err(|e| e.to_string())
 }
 
-/// Send a command to the first running camera.
+/// Send a command to the first running camera that supports the required capability.
+/// `action` is also used as the capability name (e.g. "ptz", "patrol").
 pub async fn send_command_to_any_camera(
     state: &AppState,
     action: &str,
     params: serde_json::Value,
 ) -> Result<String, String> {
     let cameras = state.cameras.read().await;
+
+    // First try to find a camera with the matching capability
     let cam = cameras
         .values()
-        .find(|c| c.running && c.cmd_tx.is_some())
+        .find(|c| c.running && c.cmd_tx.is_some() && c.has_capability(action))
+        .or_else(|| {
+            // Fall back to any connected camera (it may handle the command anyway)
+            cameras.values().find(|c| c.running && c.cmd_tx.is_some())
+        })
         .ok_or_else(|| "No connected camera available".to_string())?;
+
+    if !cam.has_capability(action) {
+        return Err(format!(
+            "Camera '{}' does not support '{}'. Capabilities: {:?}",
+            cam.camera_id, action, cam.capabilities
+        ));
+    }
     let camera_id = cam.camera_id.clone();
     let tx = cam.cmd_tx.as_ref().unwrap();
     let msg = ServerMessage::Command {
@@ -173,8 +192,12 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
             CameraMessage::Register {
                 camera_id: cid,
                 name,
+                capabilities,
             } => {
-                info!("Camera registered: {} ({})", cid, name);
+                info!(
+                    "Camera registered: {} ({}) capabilities={:?}",
+                    cid, name, capabilities
+                );
                 camera_id = Some(cid.clone());
 
                 let mut cameras = state.cameras.write().await;
@@ -184,6 +207,7 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
                 let cam = cameras.get_mut(&cid).unwrap();
                 cam.running = true;
                 cam.cmd_tx = Some(cmd_tx.clone());
+                cam.capabilities = capabilities;
 
                 let ack = ServerMessage::Registered { camera_id: cid };
                 let mut sender = ws_sender.lock().await;

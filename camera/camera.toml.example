@@ -24,3 +24,8 @@ interval = 2.0
 max_dimension = 768
 # JPEG quality (1-100)
 jpeg_quality = 85
+
+# Capabilities this camera supports. The server uses these to decide
+# whether to send movement commands. Common values: "ptz", "patrol".
+# Leave empty for fixed cameras (e.g. Mac built-in webcam).
+# capabilities = ["ptz", "patrol"]

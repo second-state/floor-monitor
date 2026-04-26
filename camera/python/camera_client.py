@@ -137,6 +137,7 @@ def run(config_path: str):
     interval = float(cam_cfg.get("interval", 2.0))
     max_dim = int(cam_cfg.get("max_dimension", 768))
     jpeg_quality = int(cam_cfg.get("jpeg_quality", 85))
+    capabilities = cam_cfg.get("capabilities", [])
 
     cap = open_camera(cfg)
 
@@ -149,6 +150,7 @@ def run(config_path: str):
                     "type": "register",
                     "camera_id": camera_id,
                     "name": camera_name,
+                    "capabilities": capabilities,
                 })
                 websocket.send(register_msg)
                 resp = websocket.recv(timeout=10)

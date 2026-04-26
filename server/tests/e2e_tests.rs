@@ -432,3 +432,58 @@ async fn test_e2e_command_to_nonexistent_camera() {
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not found"));
 }
+
+/// Test that capability checking rejects commands the camera doesn't support.
+#[tokio::test]
+async fn test_e2e_capability_check() {
+    let (_base_url, state) = start_server().await;
+    let ws_url = _base_url.replace("http://", "ws://") + "/ws";
+
+    // Register a camera WITHOUT ptz capability
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+    let register = serde_json::json!({
+        "type": "register",
+        "camera_id": "no-ptz-cam",
+        "name": "Fixed Camera",
+        "capabilities": [],
+    });
+    ws.send(Message::Text(register.to_string().into()))
+        .await
+        .unwrap();
+    let _ack = ws.next().await.unwrap().unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Trying to send PTZ via send_command_to_any_camera should fail
+    let result = floor_monitor_server::ws::send_command_to_any_camera(
+        &state,
+        "ptz",
+        serde_json::json!({"direction": "pan_left"}),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("does not support"));
+
+    // Now register a camera WITH ptz capability
+    let (mut ws2, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+    let register2 = serde_json::json!({
+        "type": "register",
+        "camera_id": "ptz-cam",
+        "name": "PTZ Camera",
+        "capabilities": ["ptz", "patrol"],
+    });
+    ws2.send(Message::Text(register2.to_string().into()))
+        .await
+        .unwrap();
+    let _ack2 = ws2.next().await.unwrap().unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Now the same command should succeed (routed to ptz-cam)
+    let result = floor_monitor_server::ws::send_command_to_any_camera(
+        &state,
+        "ptz",
+        serde_json::json!({"direction": "pan_left"}),
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), "ptz-cam");
+}
