@@ -56,9 +56,16 @@ max_tokens = 200
 # max_tokens = 150
 # temperature = 0.0  # optional; omit to use provider default
 
-# Monitor mode defaults
+# Monitor mode — controls VLM prompts and alert behavior.
+# Profiles are loaded from the profiles/ directory (editable TOML files).
+# To create a custom profile, copy an existing .toml and edit it.
 [monitor]
+# Built-in profiles:
+#   "kid"      — children's room safety (roughhousing, climbing, sharp objects, ...)
+#   "office"   — workplace safety (injury, conflict, fire, intruders, ...)
+#   "retail"   — store operations (unattended customers, cleanliness, ...)
+#   "security" — home security (intruder, forced entry, fire, ...)
 default_profile = "kid"
-summary_window_min = 30
-alert_consecutive = 2
-alert_cooldown_sec = 120
+summary_window_min = 30    # periodic summary pushed to Telegram (minutes, 0 to disable)
+alert_consecutive = 2      # consecutive high-risk frames before firing an alert
+alert_cooldown_sec = 120   # seconds between alerts for the same camera
