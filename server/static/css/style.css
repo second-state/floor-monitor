@@ -180,17 +180,52 @@ main {
     font-weight: 600;
 }
 
-/* Activity summaries */
-.summaries-section {
-    margin-bottom: 1rem;
+/* Tabs (right panel) */
+.tab-bar {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.75rem;
 }
 
+.tab-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    padding: 0.4rem 0.9rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-bottom: -1px;
+}
+
+.tab-btn:hover {
+    color: var(--text);
+}
+
+.tab-btn.active {
+    background: var(--card-bg);
+    border-color: var(--border);
+    color: var(--accent);
+}
+
+.tab-panel {
+    display: none;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+/* Activity summaries */
 #summaries-container {
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 0.75rem;
-    max-height: 30vh;
+    max-height: 80vh;
     overflow-y: auto;
 }
 

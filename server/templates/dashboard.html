@@ -87,8 +87,39 @@
     </div>
 
     <div class="panel panel-right">
-        <section class="summaries-section">
-            <h2>Activity Summaries</h2>
+        <div class="tab-bar" role="tablist">
+            <button type="button" class="tab-btn active" role="tab"
+                    aria-selected="true" aria-controls="tab-activities"
+                    data-tab="activities">Activities</button>
+            <button type="button" class="tab-btn" role="tab"
+                    aria-selected="false" aria-controls="tab-summaries"
+                    data-tab="summaries">Summaries</button>
+        </div>
+
+        <section id="tab-activities" class="tab-panel active" role="tabpanel"
+                 aria-labelledby="tab-activities-btn">
+            <div id="results-container">
+                {% if results | length == 0 %}
+                <p class="muted">Waiting for frames...</p>
+                {% else %}
+                {% for r in results %}
+                <div class="result-entry">
+                    <div class="result-header">
+                        <strong>frame={{ r.frame_no }}</strong> |
+                        {{ r.time }} |
+                        infer={{ r.infer_secs | round(method="ceil", precision=2) }}s |
+                        model={{ r.model }} |
+                        camera={{ r.camera_id }}
+                    </div>
+                    <div class="result-text">{{ r.text }}</div>
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </section>
+
+        <section id="tab-summaries" class="tab-panel" role="tabpanel"
+                 aria-labelledby="tab-summaries-btn">
             <div id="summaries-container">
                 {% if summaries | length == 0 %}
                 <p class="muted">No summaries yet — first one fires after the configured interval.</p>
@@ -104,26 +135,6 @@
                 {% endif %}
             </div>
         </section>
-
-        <h2>Analysis Results</h2>
-        <div id="results-container">
-            {% if results | length == 0 %}
-            <p class="muted">Waiting for frames...</p>
-            {% else %}
-            {% for r in results %}
-            <div class="result-entry">
-                <div class="result-header">
-                    <strong>frame={{ r.frame_no }}</strong> |
-                    {{ r.time }} |
-                    infer={{ r.infer_secs | round(method="ceil", precision=2) }}s |
-                    model={{ r.model }} |
-                    camera={{ r.camera_id }}
-                </div>
-                <div class="result-text">{{ r.text }}</div>
-            </div>
-            {% endfor %}
-            {% endif %}
-        </div>
     </div>
 </div>
 {% endblock %}

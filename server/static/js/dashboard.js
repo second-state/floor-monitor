@@ -178,7 +178,29 @@
         });
     }
 
+    // --- Tabs ---
+    function initTabs() {
+        const buttons = document.querySelectorAll(".tab-btn");
+        const panels = document.querySelectorAll(".tab-panel");
+        if (buttons.length === 0) return;
+
+        buttons.forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                const target = btn.getAttribute("data-tab");
+                buttons.forEach(function (b) {
+                    const on = b === btn;
+                    b.classList.toggle("active", on);
+                    b.setAttribute("aria-selected", on ? "true" : "false");
+                });
+                panels.forEach(function (p) {
+                    p.classList.toggle("active", p.id === "tab-" + target);
+                });
+            });
+        });
+    }
+
     // --- Init ---
+    initTabs();
     connectSSE();
     setInterval(pollPreviews, PREVIEW_POLL_MS);
     setInterval(refreshSummaries, SUMMARY_POLL_MS);
