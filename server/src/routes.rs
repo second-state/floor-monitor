@@ -77,6 +77,7 @@ pub async fn dashboard(
     ctx.insert("profiles", &profiles);
     ctx.insert("active_profile", &state.config.monitor.default_profile);
     ctx.insert("model", state.vlm.model_name());
+    ctx.insert("static_version", &state.static_version);
     ctx.insert(
         "ws_url",
         &format!(

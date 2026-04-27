@@ -127,6 +127,10 @@ pub struct AppState {
     pub notifier: Option<Arc<TelegramNotifier>>,
     /// Recent periodic summaries (newest last). Capped at `MAX_SUMMARIES`.
     pub summaries: Arc<RwLock<VecDeque<SummaryEntry>>>,
+    /// Cache-busting token for static assets — derived from process start
+    /// time. Templates append `?v={static_version}` to script/style URLs so
+    /// browsers always pick up the latest JS/CSS after a server restart.
+    pub static_version: String,
 }
 
 impl AppState {
@@ -154,6 +158,7 @@ impl AppState {
             alert_tracker,
             notifier,
             summaries: Arc::new(RwLock::new(VecDeque::with_capacity(MAX_SUMMARIES))),
+            static_version: chrono::Local::now().format("%Y%m%d%H%M%S").to_string(),
         };
         (state, alert_rx)
     }

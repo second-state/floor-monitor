@@ -140,5 +140,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/dashboard.js?v={{ static_version | default(value='dev') }}"></script>
 {% endblock %}
