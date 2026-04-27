@@ -166,3 +166,24 @@ pub async fn push_summary(state: &AppState, entry: SummaryEntry) {
         buf.pop_front();
     }
 }
+
+/// Persist a summary, broadcast it to SSE subscribers, and (only if a
+/// Telegram notifier is configured) push it to Telegram.
+///
+/// **Telegram is optional.** Persistence and SSE broadcast happen
+/// unconditionally so the dashboard always receives summaries when the
+/// scheduler runs, regardless of `[telegram]` config.
+pub async fn record_summary(state: &AppState, entry: SummaryEntry) {
+    push_summary(state, entry.clone()).await;
+
+    let event_json = serde_json::to_string(&SseEvent::Summary(entry.clone())).unwrap_or_default();
+    let _ = state.events_tx.send(event_json);
+
+    if let Some(ref n) = state.notifier {
+        let msg = format!(
+            "🕒 *{} min activity summary*\n\n{}",
+            entry.window_min, entry.text
+        );
+        n.send(&msg).await;
+    }
+}

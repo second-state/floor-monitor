@@ -66,7 +66,7 @@ max_tokens = 200
 #   "retail"   — store operations (unattended customers, cleanliness, ...)
 #   "security" — home security (intruder, forced entry, fire, ...)
 default_profile = "kid"
-summary_window_min = 30    # periodic summary pushed to Telegram (minutes, 0 to disable)
+summary_window_min = 30    # periodic summary shown on the dashboard and pushed to Telegram (minutes, 0 to disable). First summary fires after one full window.
 alert_consecutive = 2      # consecutive high-risk frames before firing an alert
 alert_cooldown_sec = 120   # seconds between alerts for the same camera
 context_window_frames = 30 # recent scene descriptions injected into Q&A as short-term memory (0 to disable)

@@ -306,6 +306,50 @@ api_url = "http://localhost:8000/v1/chat/completions"
     );
 }
 
+#[tokio::test]
+async fn test_record_summary_works_without_telegram() {
+    // Config without [telegram] — notifier should be None.
+    let toml_str = r#"
+[server]
+port = 3456
+
+[vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+
+[monitor]
+summary_window_min = 30
+"#;
+    let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
+    let (state, _rx) = floor_monitor_server::state::AppState::new(config);
+    assert!(
+        state.notifier.is_none(),
+        "Test precondition: notifier must be None"
+    );
+
+    // Subscribe to SSE BEFORE recording so the broadcast isn't dropped.
+    let mut rx = state.events_tx.subscribe();
+
+    let entry = floor_monitor_server::state::SummaryEntry {
+        time: "2026-04-27 12:00".to_string(),
+        window_min: 30,
+        text: "All quiet on the western front.".to_string(),
+    };
+    floor_monitor_server::state::record_summary(&state, entry.clone()).await;
+
+    // 1. Persisted in the rolling buffer.
+    let buf = state.summaries.read().await;
+    assert_eq!(buf.len(), 1);
+    assert_eq!(buf.front().unwrap().text, entry.text);
+    drop(buf);
+
+    // 2. Broadcast on SSE with kind="summary".
+    let received = rx.try_recv().expect("SSE event should be broadcast");
+    let v: serde_json::Value = serde_json::from_str(&received).unwrap();
+    assert_eq!(v["kind"], "summary");
+    assert_eq!(v["text"], entry.text);
+    assert_eq!(v["window_min"], 30);
+}
+
 #[test]
 fn test_sse_event_serializes_with_kind_tag() {
     let result = floor_monitor_server::state::FrameResult {

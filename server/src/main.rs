@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::routing::get;
 use axum::Router;
 use tower_http::services::ServeDir;
-use tracing::info;
+use tracing::{info, warn};
 
 use floor_monitor_server::config::Config;
 use floor_monitor_server::state::AppState;
@@ -75,6 +75,10 @@ async fn main() {
     // summaries to new visitors, and broadcasts via SSE for live updates.
     let summary_min = config.monitor.summary_window_min;
     if summary_min > 0 {
+        info!(
+            "Summary scheduler enabled: first summary in {} min, then every {} min",
+            summary_min, summary_min
+        );
         let s = state.clone();
         let profile_id = config.monitor.default_profile.clone();
         tokio::spawn(async move {
@@ -83,7 +87,7 @@ async fn main() {
             interval.tick().await; // skip first immediate tick
             loop {
                 interval.tick().await;
-                info!("Summary scheduler firing ({}min window)", summary_min);
+                info!("Summary scheduler tick ({}min window)", summary_min);
 
                 let summary_intro = s
                     .monitor_profiles
@@ -102,6 +106,7 @@ async fn main() {
                 drop(cameras);
 
                 if entries.is_empty() {
+                    info!("Summary scheduler skipping tick — no camera results in buffer");
                     continue;
                 }
 
@@ -116,28 +121,23 @@ async fn main() {
                             window_min: summary_min,
                             text: text.clone(),
                         };
-                        floor_monitor_server::state::push_summary(&s, entry.clone()).await;
-
-                        // Broadcast over SSE for live dashboard updates
-                        let event_json = serde_json::to_string(
-                            &floor_monitor_server::state::SseEvent::Summary(entry),
-                        )
-                        .unwrap_or_default();
-                        let _ = s.events_tx.send(event_json);
-
-                        // Push to Telegram if configured
-                        if let Some(ref n) = s.notifier {
-                            let msg =
-                                format!("🕒 *{} min activity summary*\n\n{}", summary_min, text);
-                            n.send(&msg).await;
-                        }
+                        // record_summary persists + broadcasts unconditionally,
+                        // and pushes to Telegram only if configured.
+                        floor_monitor_server::state::record_summary(&s, entry).await;
+                        info!(
+                            "Summary saved ({} chars from {} entries)",
+                            text.len(),
+                            entries.len()
+                        );
                     }
                     Err(e) => {
-                        info!("Summary generation failed: {}", e);
+                        warn!("Summary generation failed: {}", e);
                     }
                 }
             }
         });
+    } else {
+        info!("Summary scheduler disabled (summary_window_min = 0)");
     }
 
     // Build routes
