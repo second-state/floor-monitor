@@ -208,16 +208,26 @@
 
 // --- Controls (global scope for onclick handlers) ---
 
-function showResult(elemId, text, isError) {
+// `persistent`: when true, the message stays until explicitly replaced.
+// Used for the ask answer (kept until the next question) — transient
+// statuses like PTZ acknowledgements still auto-clear after 10s.
+function showResult(elemId, text, isError, persistent) {
     var el = document.getElementById(elemId);
     if (!el) return;
+    // Cancel any pending clear timer from a previous transient message.
+    if (el._clearTimer) {
+        clearTimeout(el._clearTimer);
+        el._clearTimer = null;
+    }
     el.textContent = text;
     el.className = "control-result" + (isError ? " error" : " success");
-    // Auto-clear after 10 seconds
-    setTimeout(function () {
-        el.textContent = "";
-        el.className = "control-result";
-    }, 10000);
+    if (!persistent) {
+        el._clearTimer = setTimeout(function () {
+            el.textContent = "";
+            el.className = "control-result";
+            el._clearTimer = null;
+        }, 10000);
+    }
 }
 
 function askQuestion() {
@@ -228,7 +238,8 @@ function askQuestion() {
 
     btn.disabled = true;
     btn.textContent = "Thinking...";
-    showResult("ask-result", "Analyzing...", false);
+    // Transient "Analyzing..." status — auto-clears if the request hangs.
+    showResult("ask-result", "Analyzing...", false, false);
 
     fetch("/api/ask", {
         method: "POST",
@@ -238,17 +249,19 @@ function askQuestion() {
         .then(function (r) { return r.json(); })
         .then(function (data) {
             if (data.error) {
-                showResult("ask-result", data.error, true);
+                // Errors persist too — user should see why their question failed.
+                showResult("ask-result", data.error, true, true);
             } else {
                 var text = data.answer || "(empty response)";
                 if (data.infer_secs) {
                     text += " (" + data.infer_secs.toFixed(1) + "s)";
                 }
-                showResult("ask-result", text, false);
+                // Persist the answer until the next question is asked.
+                showResult("ask-result", text, false, true);
             }
         })
         .catch(function (e) {
-            showResult("ask-result", "Request failed: " + e, true);
+            showResult("ask-result", "Request failed: " + e, true, true);
         })
         .finally(function () {
             btn.disabled = false;

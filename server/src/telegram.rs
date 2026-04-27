@@ -352,20 +352,17 @@ async fn handle_voice(state: &AppState, notifier: &TelegramNotifier, file_id: &s
 
 /// Handle a text message: classify intent (via LLM or keywords), dispatch.
 async fn handle_message(state: &AppState, notifier: &TelegramNotifier, text: &str) {
-    // Classify intent
-    let intent = if let Some(ref llm) = state.llm {
-        match llm.classify(text).await {
-            Ok(i) => {
-                info!("LLM intent: {:?}", i);
-                i
-            }
-            Err(e) => {
-                warn!("LLM classify failed, falling back to keywords: {}", e);
-                llm::classify_keywords(text)
-            }
+    // Classify intent via the required LLM. Falls back to keyword matching
+    // if the LLM call errors at request time (network blip, provider down).
+    let intent = match state.llm.classify(text).await {
+        Ok(i) => {
+            info!("LLM intent: {:?}", i);
+            i
         }
-    } else {
-        llm::classify_keywords(text)
+        Err(e) => {
+            warn!("LLM classify failed, falling back to keywords: {}", e);
+            llm::classify_keywords(text)
+        }
     };
 
     // Dispatch
@@ -520,7 +517,7 @@ async fn build_history_summary(state: &AppState, minutes: u32) -> String {
         minutes, digest
     );
 
-    match state.vlm.infer_text_only(&prompt).await {
+    match state.llm.complete(&prompt).await {
         Ok((text, _)) => text,
         Err(e) => format!("Summary generation failed: {}", e),
     }

@@ -52,7 +52,13 @@ fn test_state() -> Arc<floor_monitor_server::state::AppState> {
         telegram: Default::default(),
         monitor: Default::default(),
         asr: Default::default(),
-        llm: Default::default(),
+        llm: floor_monitor_server::config::LlmConfig {
+            api_url: "http://localhost:99999/v1/chat/completions".to_string(),
+            api_key: None,
+            model: "test-llm".to_string(),
+            max_tokens: 100,
+            temperature: None,
+        },
     };
     let (state, _alert_rx) = floor_monitor_server::state::AppState::new(config);
     Arc::new(state)

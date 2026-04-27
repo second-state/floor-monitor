@@ -116,7 +116,8 @@ pub struct AppState {
     pub cameras: Arc<RwLock<HashMap<String, CameraState>>>,
     pub vlm: Arc<VlmClient>,
     pub asr: Option<Arc<AsrClient>>,
-    pub llm: Option<Arc<LlmClient>>,
+    /// LLM client. Required (config validation enforces non-empty `api_url`).
+    pub llm: Arc<LlmClient>,
     pub monitor_profiles: Arc<HashMap<String, MonitorProfile>>,
     /// Broadcast channel for SSE / live UI updates.
     pub events_tx: broadcast::Sender<String>,
@@ -132,7 +133,7 @@ impl AppState {
     pub fn new(config: Config) -> (Self, mpsc::UnboundedReceiver<AlertEvent>) {
         let vlm = Arc::new(VlmClient::new(&config.vlm));
         let asr = AsrClient::new(&config.asr).map(Arc::new);
-        let llm = LlmClient::new(&config.llm).map(Arc::new);
+        let llm = Arc::new(LlmClient::new(&config.llm));
         let (events_tx, _) = broadcast::channel(256);
         let (alert_tx, alert_rx) = mpsc::unbounded_channel();
         // Load profiles from external TOML files; fall back to built-in defaults

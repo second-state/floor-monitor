@@ -130,10 +130,10 @@ max_tokens = 200
 # api_key = "sk-..."
 # model = "whisper-1"
 
-# [llm]  # for intent classification (without this, keyword matching is used)
-# api_url = "http://localhost:8000/v1/chat/completions"
+[llm]  # required — drives intent classification AND periodic summaries
+api_url = "http://localhost:8000/v1/chat/completions"
 # api_key = "sk-..."
-# model = "Qwen/Qwen2.5-3B-Instruct"
+model = "Qwen/Qwen2.5-3B-Instruct"
 
 [monitor]
 default_profile = "kid"        # kid | office | retail | security

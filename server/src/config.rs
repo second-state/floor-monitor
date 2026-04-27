@@ -5,14 +5,16 @@ use std::path::Path;
 pub struct Config {
     pub server: ServerConfig,
     pub vlm: VlmConfig,
+    /// `[llm]` is **required**. Drives intent classification *and* the
+    /// periodic summary generation, so a text-completion model is always
+    /// needed even when Telegram is not configured.
+    pub llm: LlmConfig,
     #[serde(default)]
     pub telegram: TelegramConfig,
     #[serde(default)]
     pub monitor: MonitorConfig,
     #[serde(default)]
     pub asr: AsrConfig,
-    #[serde(default)]
-    pub llm: LlmConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,10 +85,11 @@ pub struct AsrConfig {
     pub model: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfig {
-    /// OpenAI-compatible chat completions endpoint for intent classification.
-    pub api_url: Option<String>,
+    /// OpenAI-compatible chat completions endpoint. **Required.** Used for
+    /// both intent classification (Telegram) and periodic activity summaries.
+    pub api_url: String,
     pub api_key: Option<String>,
     #[serde(default = "default_llm_model")]
     pub model: String,
@@ -136,6 +139,11 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
+        if config.llm.api_url.trim().is_empty() {
+            return Err("[llm].api_url must be set (the LLM is used for both \
+                        intent classification and periodic summaries)"
+                .into());
+        }
         Ok(config)
     }
 }

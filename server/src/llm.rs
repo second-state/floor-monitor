@@ -91,21 +91,78 @@ struct ResponseMessage {
 }
 
 impl LlmClient {
-    /// Returns `None` if LLM is not configured (no api_url).
-    pub fn new(config: &LlmConfig) -> Option<Self> {
-        let url = config.api_url.as_deref()?.trim();
-        if url.is_empty() {
-            return None;
-        }
-        info!("LLM client: model={} url={}", config.model, url);
-        Some(Self {
-            api_url: url.to_string(),
+    /// Build the client. The caller (config loader) is responsible for
+    /// validating that `api_url` is non-empty.
+    pub fn new(config: &LlmConfig) -> Self {
+        info!("LLM client: model={} url={}", config.model, config.api_url);
+        Self {
+            api_url: config.api_url.clone(),
             api_key: config.api_key.clone(),
             model: config.model.clone(),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             http: reqwest::Client::new(),
-        })
+        }
+    }
+
+    /// Free-form text completion. Used by the summary scheduler and
+    /// history-summary Q&A. Sends a single user message, no system prompt.
+    pub async fn complete(
+        &self,
+        prompt: &str,
+    ) -> Result<(String, f64), Box<dyn std::error::Error + Send + Sync>> {
+        let payload = ChatRequest {
+            model: self.model.clone(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+        };
+
+        let mut req = self
+            .http
+            .post(&self.api_url)
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(120));
+        if let Some(ref key) = self.api_key {
+            if !key.is_empty() {
+                req = req.bearer_auth(key);
+            }
+        }
+
+        let start = std::time::Instant::now();
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let truncated: String = body.chars().take(300).collect();
+            warn!("LLM API error {}: {}", status, truncated);
+            return Err(format!("LLM API returned {status}: {truncated}").into());
+        }
+
+        let raw_text = resp.text().await.unwrap_or_default();
+        let body: ChatResponse = match serde_json::from_str(&raw_text) {
+            Ok(b) => b,
+            Err(e) => {
+                let truncated: String = raw_text.chars().take(200).collect();
+                warn!("LLM returned invalid JSON: {} — body: {}", e, truncated);
+                return Err(format!("LLM returned invalid JSON: {}", e).into());
+            }
+        };
+        let text = body
+            .choices
+            .first()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_default();
+        let elapsed = start.elapsed().as_secs_f64();
+        info!(
+            "LLM completion done in {:.2}s: {}",
+            elapsed,
+            &text[..text.len().min(80)]
+        );
+        Ok((text, elapsed))
     }
 
     /// Classify a user message into an Intent.

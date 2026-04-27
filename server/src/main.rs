@@ -114,7 +114,7 @@ async fn main() {
                 let digest = entries.join("\n");
                 let prompt = format!("{}\n\n{}", summary_intro, digest);
 
-                match s.vlm.infer_text_only(&prompt).await {
+                match s.llm.complete(&prompt).await {
                     Ok((text, _)) => {
                         let entry = floor_monitor_server::state::SummaryEntry {
                             time: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),

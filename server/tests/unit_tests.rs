@@ -284,6 +284,9 @@ port = 3456
 
 [vlm]
 api_url = "http://localhost:8000/v1/chat/completions"
+
+[llm]
+api_url = "http://localhost:8000/v1/chat/completions"
 "#;
     let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
     let (state, _rx) = floor_monitor_server::state::AppState::new(config);
@@ -308,12 +311,15 @@ api_url = "http://localhost:8000/v1/chat/completions"
 
 #[tokio::test]
 async fn test_record_summary_works_without_telegram() {
-    // Config without [telegram] — notifier should be None.
+    // Config without [telegram] — notifier should be None. [llm] is required.
     let toml_str = r#"
 [server]
 port = 3456
 
 [vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+
+[llm]
 api_url = "http://localhost:8000/v1/chat/completions"
 
 [monitor]
@@ -439,6 +445,9 @@ port = 3456
 
 [vlm]
 api_url = "http://localhost:8000/v1/chat/completions"
+
+[llm]
+api_url = "http://localhost:8000/v1/chat/completions"
 "#;
     let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
     assert_eq!(config.monitor.context_window_frames, 30);
@@ -451,6 +460,9 @@ fn test_config_context_window_frames_override() {
 port = 3456
 
 [vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+
+[llm]
 api_url = "http://localhost:8000/v1/chat/completions"
 
 [monitor]
@@ -481,13 +493,14 @@ model = "qwen2.5:3b"
 "#;
     let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
     assert!(config.asr.api_url.is_some());
-    assert!(config.llm.api_url.is_some());
+    assert!(!config.llm.api_url.is_empty());
     assert_eq!(config.asr.model, "whisper-1");
     assert_eq!(config.llm.model, "qwen2.5:3b");
 }
 
 #[test]
-fn test_config_without_asr_and_llm() {
+fn test_config_without_llm_section_fails_to_parse() {
+    // [llm] is required; TOML without it must fail to deserialize.
     let toml_str = r#"
 [server]
 port = 3456
@@ -495,7 +508,33 @@ port = 3456
 [vlm]
 api_url = "http://localhost:8000/v1/chat/completions"
 "#;
-    let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
-    assert!(config.asr.api_url.is_none());
-    assert!(config.llm.api_url.is_none());
+    let result: Result<floor_monitor_server::config::Config, _> = toml::from_str(toml_str);
+    assert!(result.is_err(), "Config without [llm] should fail");
+}
+
+#[test]
+fn test_config_load_rejects_empty_llm_api_url() {
+    // toml::from_str succeeds with an empty string, but Config::load must
+    // reject it because the LLM is needed for summaries and intent.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[server]
+port = 3456
+
+[vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+
+[llm]
+api_url = ""
+"#,
+    )
+    .unwrap();
+    let result = floor_monitor_server::config::Config::load(&path);
+    assert!(
+        result.is_err(),
+        "Config::load should reject empty llm.api_url"
+    );
 }

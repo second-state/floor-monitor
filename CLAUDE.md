@@ -25,7 +25,7 @@ camera/ (Python or Rust)          server/ (Rust/Axum)
 ### Core Features
 
 1. **WebSocket camera feed** — Camera clients register, stream JPEG frames; server processes and returns results. Server can also send commands (PTZ, patrol) back to camera clients.
-2. **Generic VLM/LLM backend** — Supports any OpenAI-compatible `/v1/chat/completions` endpoint (vLLM, OpenAI, Ollama with `--openai` flag, etc.). Separate `[vlm]` (vision) and `[llm]` (text/intent) configuration.
+2. **Generic VLM/LLM backend** — Supports any OpenAI-compatible `/v1/chat/completions` endpoint (vLLM, OpenAI, Ollama with `--openai` flag, etc.). Separate `[vlm]` (vision) and `[llm]` (text/intent/summary) configuration. Both are **required**; `[llm]` drives intent classification and periodic activity summaries (so summaries don't depend on Telegram). The two sections can point at the same endpoint.
 3. **Web dashboard** — Live camera preview, analysis results via SSE, camera status. All HTML/CSS/JS in editable template files.
 4. **Monitor profiles** — Domain-specific structured JSON prompts (Kid / Office / Retail / Home Security) with alert pipeline (consecutive high-risk → Telegram notification) and periodic summary scheduler.
 5. **Telegram bot** — Text and voice messages. Voice messages transcribed via ASR (Whisper-compatible API). LLM-based intent classification routes to: visual question, snapshot, patrol, PTZ control, history summary, help, status.

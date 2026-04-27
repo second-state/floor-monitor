@@ -56,6 +56,10 @@ The `temperature` field in `[vlm]` and `[llm]` is `Option<f32>`. When omitted, t
 
 `max_tokens` limits VLM/LLM response length in tokens. For structured JSON monitor output, 200 is sufficient. For intent classification, 150 is enough. Lower values = faster response and lower cost on cloud APIs. The server processes every frame, so keeping this low matters for throughput.
 
+### Text-Only Paths Use `[llm]`, Not `[vlm]`
+
+Text-only inference (the periodic summary scheduler and Telegram history-summary Q&A) used to call `VlmClient::infer_text_only`, which shipped a hard-coded 1×1 placeholder JPEG so it could reuse the vision payload format. Some VLM providers validate image payloads and reject obvious dummies with a 400 (`"The image data you provided does not represent a valid image"`), silently breaking summaries even when per-frame inference worked fine. Both paths now go through `LlmClient::complete`, and `[llm]` is a required config section. `Config::load` enforces non-empty `api_url` at startup. `[llm]` and `[vlm]` can point at the same OpenAI-compatible endpoint, or `[llm]` can target a smaller text-only model for cheaper/faster summaries.
+
 ### Invalid JSON Responses
 
 VLM and LLM clients read the HTTP response as text first, then parse with `serde_json::from_str`. If the provider returns a 200 with non-JSON body (HTML error page, malformed response), the error is logged with a truncated body snippet and returned as `Err` — never a panic. String truncation uses `.chars().take(N)` to prevent panics on multi-byte UTF-8.

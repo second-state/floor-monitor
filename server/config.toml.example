@@ -44,16 +44,19 @@ max_tokens = 200
 # api_key = "sk-..."
 # model = "whisper-1"
 
-# Optional: LLM for intent classification of Telegram messages
-# Routes natural language (text or transcribed voice) to the right handler:
-# visual question, PTZ control, patrol, snapshot, history summary.
-# Without this, the bot uses simple keyword matching.
-# Must be an OpenAI-compatible /v1/chat/completions endpoint.
-# [llm]
-# api_url = "http://localhost:8000/v1/chat/completions"
+# Required: LLM for intent classification AND periodic activity summaries.
+# Used for two text-only paths:
+#   1. Telegram intent routing (visual question, PTZ, patrol, snapshot, history)
+#   2. The periodic summary scheduler (drives both Telegram and the dashboard's
+#      Summaries tab — see [monitor].summary_window_min)
+# Must be an OpenAI-compatible /v1/chat/completions endpoint. Can point at the
+# same server as [vlm] if your model handles both, or at a smaller text-only
+# model for lower cost/latency.
+[llm]
+api_url = "http://localhost:8000/v1/chat/completions"
 # api_key = "sk-..."
-# model = "Qwen/Qwen2.5-3B-Instruct"
-# max_tokens = 150
+model = "Qwen/Qwen2.5-3B-Instruct"
+max_tokens = 400
 # temperature = 0.0  # optional; omit to use provider default
 
 # Monitor mode — controls VLM prompts and alert behavior.
