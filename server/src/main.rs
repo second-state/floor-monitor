@@ -57,59 +57,6 @@ async fn main() {
             }
         });
 
-        // Spawn summary scheduler
-        let summary_min = config.monitor.summary_window_min;
-        if summary_min > 0 {
-            let s = state.clone();
-            let n2 = notifier.clone();
-            let profile_id = config.monitor.default_profile.clone();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-                    u64::from(summary_min) * 60,
-                ));
-                interval.tick().await; // skip first immediate tick
-                loop {
-                    interval.tick().await;
-                    info!("Summary scheduler firing ({}min window)", summary_min);
-
-                    let summary_intro = s
-                        .monitor_profiles
-                        .get(&profile_id)
-                        .map(|p| p.summary_intro.as_str())
-                        .unwrap_or("Summarize the recent activity.");
-
-                    // Collect recent results
-                    let cameras = s.cameras.read().await;
-                    let mut entries: Vec<String> = Vec::new();
-                    for cam in cameras.values() {
-                        for r in cam.results.iter().rev().take(80) {
-                            entries.push(format!("{} [{}] {}", r.time, r.camera_id, r.text));
-                        }
-                    }
-                    drop(cameras);
-
-                    if entries.is_empty() {
-                        continue;
-                    }
-
-                    entries.reverse();
-                    let digest = entries.join("\n");
-                    let prompt = format!("{}\n\n{}", summary_intro, digest);
-
-                    match s.vlm.infer_text_only(&prompt).await {
-                        Ok((text, _)) => {
-                            let msg =
-                                format!("🕒 *{} min activity summary*\n\n{}", summary_min, text);
-                            n2.send(&msg).await;
-                        }
-                        Err(e) => {
-                            info!("Summary generation failed: {}", e);
-                        }
-                    }
-                }
-            });
-        }
-
         // Start Telegram listener
         info!("Telegram bot enabled");
         let startup_msg = format!(
@@ -123,6 +70,76 @@ async fn main() {
         telegram::start_listener(state.clone(), notifier.clone());
     }
 
+    // Summary scheduler — runs whether or not Telegram is configured.
+    // Persists each summary in AppState so the dashboard can show recent
+    // summaries to new visitors, and broadcasts via SSE for live updates.
+    let summary_min = config.monitor.summary_window_min;
+    if summary_min > 0 {
+        let s = state.clone();
+        let profile_id = config.monitor.default_profile.clone();
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(u64::from(summary_min) * 60));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                info!("Summary scheduler firing ({}min window)", summary_min);
+
+                let summary_intro = s
+                    .monitor_profiles
+                    .get(&profile_id)
+                    .map(|p| p.summary_intro.as_str())
+                    .unwrap_or("Summarize the recent activity.");
+
+                // Collect recent per-frame descriptions
+                let cameras = s.cameras.read().await;
+                let mut entries: Vec<String> = Vec::new();
+                for cam in cameras.values() {
+                    for r in cam.results.iter().rev().take(80) {
+                        entries.push(format!("{} [{}] {}", r.time, r.camera_id, r.text));
+                    }
+                }
+                drop(cameras);
+
+                if entries.is_empty() {
+                    continue;
+                }
+
+                entries.reverse();
+                let digest = entries.join("\n");
+                let prompt = format!("{}\n\n{}", summary_intro, digest);
+
+                match s.vlm.infer_text_only(&prompt).await {
+                    Ok((text, _)) => {
+                        let entry = floor_monitor_server::state::SummaryEntry {
+                            time: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+                            window_min: summary_min,
+                            text: text.clone(),
+                        };
+                        floor_monitor_server::state::push_summary(&s, entry.clone()).await;
+
+                        // Broadcast over SSE for live dashboard updates
+                        let event_json = serde_json::to_string(
+                            &floor_monitor_server::state::SseEvent::Summary(entry),
+                        )
+                        .unwrap_or_default();
+                        let _ = s.events_tx.send(event_json);
+
+                        // Push to Telegram if configured
+                        if let Some(ref n) = s.notifier {
+                            let msg =
+                                format!("🕒 *{} min activity summary*\n\n{}", summary_min, text);
+                            n.send(&msg).await;
+                        }
+                    }
+                    Err(e) => {
+                        info!("Summary generation failed: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
     // Build routes
     let app = Router::new()
         .route("/", get(routes::index))
@@ -130,6 +147,7 @@ async fn main() {
         .route("/ws", get(ws::ws_handler))
         .route("/api/cameras", get(routes::api_cameras))
         .route("/api/results", get(routes::api_results))
+        .route("/api/summaries", get(routes::api_summaries))
         .route("/api/snapshot/{camera_id}", get(routes::api_snapshot))
         .route("/api/events", get(routes::api_events))
         .route("/api/ask", axum::routing::post(routes::api_ask))

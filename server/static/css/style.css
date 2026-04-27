@@ -180,6 +180,43 @@ main {
     font-weight: 600;
 }
 
+/* Activity summaries */
+.summaries-section {
+    margin-bottom: 1rem;
+}
+
+#summaries-container {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    max-height: 30vh;
+    overflow-y: auto;
+}
+
+.summary-entry {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-light);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+}
+
+.summary-entry:last-child { margin-bottom: 0; }
+
+.summary-header {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+}
+
+.summary-text {
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* Results */
 #results-container {
     max-height: 80vh;

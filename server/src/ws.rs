@@ -329,8 +329,9 @@ async fn process_frame(
         }
     }
 
-    // Broadcast to SSE subscribers
-    let event_json = serde_json::to_string(&result).unwrap_or_default();
+    // Broadcast to SSE subscribers (tagged envelope: kind="result")
+    let event_json =
+        serde_json::to_string(&crate::state::SseEvent::Result(result.clone())).unwrap_or_default();
     let _ = state.events_tx.send(event_json);
 
     // Send result back to camera client

@@ -55,6 +55,11 @@ pub async fn dashboard(
         .collect();
     drop(cameras);
 
+    // Recent summaries (newest first for display)
+    let summaries_buf = state.summaries.read().await;
+    let summaries: Vec<crate::state::SummaryEntry> = summaries_buf.iter().rev().cloned().collect();
+    drop(summaries_buf);
+
     let profiles: Vec<serde_json::Value> = state
         .monitor_profiles
         .iter()
@@ -68,6 +73,7 @@ pub async fn dashboard(
 
     ctx.insert("cameras", &camera_list);
     ctx.insert("results", &all_results);
+    ctx.insert("summaries", &summaries);
     ctx.insert("profiles", &profiles);
     ctx.insert("active_profile", &state.config.monitor.default_profile);
     ctx.insert("model", state.vlm.model_name());
@@ -108,6 +114,13 @@ pub async fn api_results(State(state): State<Arc<AppState>>) -> impl IntoRespons
         .flat_map(|c| c.results.iter().rev().take(50).cloned())
         .collect();
     axum::Json(serde_json::json!(results))
+}
+
+/// GET /api/summaries — JSON list of recent periodic summaries (newest first)
+pub async fn api_summaries(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let buf = state.summaries.read().await;
+    let summaries: Vec<crate::state::SummaryEntry> = buf.iter().rev().cloned().collect();
+    axum::Json(summaries)
 }
 
 /// GET /api/snapshot/:camera_id — latest JPEG frame for a camera

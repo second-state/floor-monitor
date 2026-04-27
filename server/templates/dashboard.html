@@ -87,6 +87,24 @@
     </div>
 
     <div class="panel panel-right">
+        <section class="summaries-section">
+            <h2>Activity Summaries</h2>
+            <div id="summaries-container">
+                {% if summaries | length == 0 %}
+                <p class="muted">No summaries yet — first one fires after the configured interval.</p>
+                {% else %}
+                {% for s in summaries %}
+                <div class="summary-entry">
+                    <div class="summary-header">
+                        <strong>{{ s.time }}</strong> · last {{ s.window_min }} min
+                    </div>
+                    <div class="summary-text">{{ s.text }}</div>
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </section>
+
         <h2>Analysis Results</h2>
         <div id="results-container">
             {% if results | length == 0 %}

@@ -274,6 +274,69 @@ fn test_parse_intent_with_junk() {
     assert!(matches!(intent, floor_monitor_server::llm::Intent::Patrol));
 }
 
+// --- Summary storage / SSE envelope tests ---
+
+#[tokio::test]
+async fn test_push_summary_caps_at_max() {
+    let toml_str = r#"
+[server]
+port = 3456
+
+[vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+"#;
+    let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
+    let (state, _rx) = floor_monitor_server::state::AppState::new(config);
+
+    for i in 0..(floor_monitor_server::state::MAX_SUMMARIES + 5) {
+        let entry = floor_monitor_server::state::SummaryEntry {
+            time: format!("2026-04-26 12:{:02}", i),
+            window_min: 30,
+            text: format!("summary {}", i),
+        };
+        floor_monitor_server::state::push_summary(&state, entry).await;
+    }
+
+    let buf = state.summaries.read().await;
+    assert_eq!(buf.len(), floor_monitor_server::state::MAX_SUMMARIES);
+    // Oldest entries should have been dropped; newest preserved at the back.
+    assert_eq!(
+        buf.back().unwrap().text,
+        format!("summary {}", floor_monitor_server::state::MAX_SUMMARIES + 4)
+    );
+}
+
+#[test]
+fn test_sse_event_serializes_with_kind_tag() {
+    let result = floor_monitor_server::state::FrameResult {
+        camera_id: "cam1".to_string(),
+        frame_no: 7,
+        time: "12:00:00".to_string(),
+        infer_secs: 1.0,
+        model: "test".to_string(),
+        text: "hello".to_string(),
+        parsed_json: None,
+    };
+    let json =
+        serde_json::to_string(&floor_monitor_server::state::SseEvent::Result(result)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["kind"], "result");
+    assert_eq!(v["frame_no"], 7);
+    assert_eq!(v["text"], "hello");
+
+    let summary = floor_monitor_server::state::SummaryEntry {
+        time: "2026-04-26 12:00".to_string(),
+        window_min: 30,
+        text: "all quiet".to_string(),
+    };
+    let json =
+        serde_json::to_string(&floor_monitor_server::state::SseEvent::Summary(summary)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["kind"], "summary");
+    assert_eq!(v["window_min"], 30);
+    assert_eq!(v["text"], "all quiet");
+}
+
 // --- Context digest tests ---
 
 fn make_result(time: &str, text: &str) -> floor_monitor_server::state::FrameResult {

@@ -6,6 +6,7 @@
     const PREVIEW_POLL_MS = 1000;
     const statusDot = document.getElementById("connection-status");
     const resultsContainer = document.getElementById("results-container");
+    const summariesContainer = document.getElementById("summaries-container");
 
     // --- SSE: live analysis results ---
     let evtSource = null;
@@ -25,7 +26,12 @@
         evtSource.onmessage = function (event) {
             try {
                 const data = JSON.parse(event.data);
-                prependResult(data);
+                if (data.kind === "summary") {
+                    prependSummary(data);
+                } else {
+                    // kind === "result" or legacy untagged payload
+                    prependResult(data);
+                }
             } catch (e) {
                 console.warn("SSE parse error:", e);
             }
@@ -70,6 +76,29 @@
         // Cap displayed results
         while (resultsContainer.children.length > 100) {
             resultsContainer.removeChild(resultsContainer.lastChild);
+        }
+    }
+
+    function prependSummary(s) {
+        if (!summariesContainer) return;
+
+        const placeholder = summariesContainer.querySelector(".muted");
+        if (placeholder) placeholder.remove();
+
+        const entry = document.createElement("div");
+        entry.className = "summary-entry";
+        entry.innerHTML =
+            '<div class="summary-header">' +
+            "<strong>" + escapeHtml(s.time || "") + "</strong> · last " +
+            (s.window_min || 0) + " min" +
+            "</div>" +
+            '<div class="summary-text">' + escapeHtml(s.text || "") + "</div>";
+
+        summariesContainer.prepend(entry);
+
+        // Cap displayed summaries
+        while (summariesContainer.children.length > 20) {
+            summariesContainer.removeChild(summariesContainer.lastChild);
         }
     }
 
