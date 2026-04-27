@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, HeaderName, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -142,8 +142,14 @@ pub async fn api_snapshot(
     StatusCode::NOT_FOUND.into_response()
 }
 
-/// GET /api/events — Server-Sent Events stream for live updates
-pub async fn api_events(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+/// GET /api/events — Server-Sent Events stream for live updates.
+///
+/// Cloudflare/proxy compatibility:
+/// - 15s keep-alive comments avoid Cloudflare's ~100s idle-connection timeout.
+/// - `Cache-Control: no-cache, no-transform` prevents edge caching and
+///   compression rewrites that would buffer the stream.
+/// - `X-Accel-Buffering: no` disables nginx response buffering.
+pub async fn api_events(State(state): State<Arc<AppState>>) -> Response {
     let mut rx = state.events_tx.subscribe();
 
     let stream = async_stream::stream! {
@@ -163,7 +169,23 @@ pub async fn api_events(State(state): State<Arc<AppState>>) -> impl IntoResponse
         }
     };
 
-    axum::response::Sse::new(stream)
+    let keep_alive = axum::response::sse::KeepAlive::new()
+        .interval(std::time::Duration::from_secs(15))
+        .text("heartbeat");
+
+    let mut response = axum::response::Sse::new(stream)
+        .keep_alive(keep_alive)
+        .into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-accel-buffering"),
+        HeaderValue::from_static("no"),
+    );
+    response
 }
 
 // ---------------------------------------------------------------------------

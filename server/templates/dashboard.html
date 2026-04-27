@@ -94,7 +94,7 @@
                 <p class="muted">No summaries yet — first one fires after the configured interval.</p>
                 {% else %}
                 {% for s in summaries %}
-                <div class="summary-entry">
+                <div class="summary-entry" data-key="{{ s.time }}|{{ s.window_min }}">
                     <div class="summary-header">
                         <strong>{{ s.time }}</strong> · last {{ s.window_min }} min
                     </div>

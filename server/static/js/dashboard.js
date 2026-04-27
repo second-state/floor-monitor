@@ -4,15 +4,24 @@
     "use strict";
 
     const PREVIEW_POLL_MS = 1000;
+    // Backfill summaries periodically and on reconnect to recover from any
+    // events lost while the SSE connection was down (e.g. Cloudflare idle
+    // timeout). Frame results are transient and don't need backfill.
+    const SUMMARY_POLL_MS = 60000;
+    const SSE_RECONNECT_MS = 3000;
     const statusDot = document.getElementById("connection-status");
     const resultsContainer = document.getElementById("results-container");
     const summariesContainer = document.getElementById("summaries-container");
 
     // --- SSE: live analysis results ---
     let evtSource = null;
+    let reconnectTimer = null;
 
     function connectSSE() {
-        if (evtSource) evtSource.close();
+        if (evtSource) {
+            evtSource.close();
+            evtSource = null;
+        }
         evtSource = new EventSource("/api/events");
 
         evtSource.onopen = function () {
@@ -21,6 +30,8 @@
                 statusDot.classList.add("connected");
                 statusDot.title = "Connected";
             }
+            // Backfill summaries that may have been emitted while disconnected.
+            refreshSummaries();
         };
 
         evtSource.onmessage = function (event) {
@@ -43,7 +54,41 @@
                 statusDot.classList.add("disconnected");
                 statusDot.title = "Disconnected — reconnecting...";
             }
+            // Close and reconnect after a short delay rather than relying on
+            // the browser's auto-reconnect, which can hammer the server.
+            if (evtSource) {
+                evtSource.close();
+                evtSource = null;
+            }
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(connectSSE, SSE_RECONNECT_MS);
         };
+    }
+
+    // Fetch the current summaries buffer and reconcile with what's on screen.
+    // Only adds entries we don't already display (deduped by time + window).
+    function refreshSummaries() {
+        if (!summariesContainer) return;
+        fetch("/api/summaries")
+            .then(function (r) { return r.json(); })
+            .then(function (list) {
+                if (!Array.isArray(list)) return;
+                const seen = new Set();
+                summariesContainer.querySelectorAll(".summary-entry").forEach(function (el) {
+                    seen.add(el.getAttribute("data-key") || "");
+                });
+                // The endpoint returns newest first; iterate reversed so we
+                // prepend in chronological order (oldest of the new batch
+                // first → newest ends up on top).
+                for (let i = list.length - 1; i >= 0; i--) {
+                    const s = list[i];
+                    const key = (s.time || "") + "|" + (s.window_min || 0);
+                    if (!seen.has(key)) prependSummary(s);
+                }
+            })
+            .catch(function (e) {
+                console.warn("Summary refresh failed:", e);
+            });
     }
 
     function prependResult(r) {
@@ -85,8 +130,16 @@
         const placeholder = summariesContainer.querySelector(".muted");
         if (placeholder) placeholder.remove();
 
+        const key = (s.time || "") + "|" + (s.window_min || 0);
+        // Skip if an entry with the same key is already shown.
+        const existing = summariesContainer.querySelector(
+            '.summary-entry[data-key="' + cssEscape(key) + '"]'
+        );
+        if (existing) return;
+
         const entry = document.createElement("div");
         entry.className = "summary-entry";
+        entry.setAttribute("data-key", key);
         entry.innerHTML =
             '<div class="summary-header">' +
             "<strong>" + escapeHtml(s.time || "") + "</strong> · last " +
@@ -100,6 +153,11 @@
         while (summariesContainer.children.length > 20) {
             summariesContainer.removeChild(summariesContainer.lastChild);
         }
+    }
+
+    function cssEscape(s) {
+        if (window.CSS && CSS.escape) return CSS.escape(s);
+        return String(s).replace(/["\\]/g, "\\$&");
     }
 
     function escapeHtml(s) {
@@ -123,6 +181,7 @@
     // --- Init ---
     connectSSE();
     setInterval(pollPreviews, PREVIEW_POLL_MS);
+    setInterval(refreshSummaries, SUMMARY_POLL_MS);
 })();
 
 // --- Controls (global scope for onclick handlers) ---

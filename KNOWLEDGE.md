@@ -12,6 +12,16 @@ Axum extractors must be ordered correctly in handler signatures. `State` should 
 
 `axum::response::Sse::new()` requires a stream of `Result<Event, _>`, not `Result<String, _>`. Always yield `axum::response::sse::Event::default().data(...)` instead of raw strings.
 
+### SSE Behind Cloudflare / Reverse Proxies
+
+Plain `axum::response::Sse` works on localhost but breaks when fronted by Cloudflare, nginx, or similar. Three fixes are needed:
+
+- **15-second keep-alive**: Cloudflare drops idle connections at ~100 seconds. Without traffic between events the browser sees a silent disconnect and reconnects in a tight loop. Use `Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("heartbeat"))` so SSE comments flow during quiet periods.
+- **Proxy-buffering headers**: axum sets `Cache-Control: no-cache` by default but not the rest. Override `Cache-Control` to `no-cache, no-transform` (the `no-transform` blocks Cloudflare from rewriting/compressing the body) and add `X-Accel-Buffering: no` (nginx response-buffer disable).
+- **Client-side reconnect + backfill**: don't rely on `EventSource` auto-reconnect — close the source on `onerror` and call `connectSSE()` after a 3s timeout. After reconnect, refetch any persistent state (e.g. summaries) from a REST endpoint to recover events emitted while disconnected. Frame results are transient and don't need backfill.
+
+In `server/src/routes.rs::api_events`, the response is built with `.into_response()` so headers can be mutated; the dashboard JS uses a 3s reconnect delay and a 60s `/api/summaries` poll for eventual consistency.
+
 ### Cargo fmt Before Clippy
 
 Always run `cargo fmt --all` before `cargo clippy`. Clippy sometimes reports style issues that fmt would fix, and fmt changes can introduce new clippy warnings. The CI checks both sequentially.
