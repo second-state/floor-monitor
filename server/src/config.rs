@@ -56,6 +56,10 @@ pub struct MonitorConfig {
     pub alert_consecutive: u32,
     #[serde(default = "default_alert_cooldown")]
     pub alert_cooldown_sec: f64,
+    /// Number of recent per-frame scene descriptions injected as context
+    /// when answering visual questions from the web UI or Telegram.
+    #[serde(default = "default_context_window_frames")]
+    pub context_window_frames: u32,
 }
 
 impl Default for MonitorConfig {
@@ -65,6 +69,7 @@ impl Default for MonitorConfig {
             summary_window_min: default_summary_window(),
             alert_consecutive: default_alert_consecutive(),
             alert_cooldown_sec: default_alert_cooldown(),
+            context_window_frames: default_context_window_frames(),
         }
     }
 }
@@ -122,6 +127,9 @@ fn default_alert_consecutive() -> u32 {
 }
 fn default_alert_cooldown() -> f64 {
     120.0
+}
+fn default_context_window_frames() -> u32 {
+    30
 }
 
 impl Config {

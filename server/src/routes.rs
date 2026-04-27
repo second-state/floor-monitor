@@ -162,22 +162,32 @@ pub struct AskRequest {
     pub question: String,
 }
 
-/// POST /api/ask — ask a visual question about the current frame
+/// POST /api/ask — ask a visual question about the current frame.
+/// Injects the last N scene descriptions (config: `context_window_frames`)
+/// as short-term memory so users can ask about recent activity.
 pub async fn api_ask(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<AskRequest>,
 ) -> impl IntoResponse {
+    let n = state.config.monitor.context_window_frames as usize;
     let cameras = state.cameras.read().await;
-    let frame = cameras.values().find_map(|c| c.latest_frame.clone());
+    let snapshot = cameras
+        .values()
+        .find(|c| c.latest_frame.is_some())
+        .map(|c| (c.latest_frame.clone().unwrap(), c.recent_context_digest(n)));
     drop(cameras);
 
-    let Some(jpeg) = frame else {
-        return axum::Json(
-            serde_json::json!({"error": "No frame available (no camera connected)"}),
-        );
+    let Some((jpeg, context)) = snapshot else {
+        return axum::Json(serde_json::json!({
+            "error": "The camera has no live frame, so I cannot chat right now."
+        }));
     };
 
-    match state.vlm.infer(&jpeg, &body.question).await {
+    match state
+        .vlm
+        .infer_with_context(&jpeg, &context, &body.question)
+        .await
+    {
         Ok((text, secs)) => axum::Json(serde_json::json!({"answer": text, "infer_secs": secs})),
         Err(e) => axum::Json(serde_json::json!({"error": format!("Inference error: {}", e)})),
     }

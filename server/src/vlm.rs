@@ -105,6 +105,27 @@ impl VlmClient {
         }
     }
 
+    /// Run inference on a JPEG image, prepending recent scene-description
+    /// context to the question. Each entry in `context` is one observation
+    /// line; ordering is preserved (caller passes oldest-first).
+    pub async fn infer_with_context(
+        &self,
+        jpeg_bytes: &[u8],
+        context: &[String],
+        question: &str,
+    ) -> Result<(String, f64), Box<dyn std::error::Error + Send + Sync>> {
+        let prompt = if context.is_empty() {
+            question.to_string()
+        } else {
+            format!(
+                "Recent observations from this camera (oldest first, most recent last):\n{}\n\nThe attached image is the current frame. Use the observations above as short-term memory; do not invent details not visible in the image or recorded above.\n\nQuestion: {}",
+                context.join("\n"),
+                question
+            )
+        };
+        self.infer(jpeg_bytes, &prompt).await
+    }
+
     /// Text-only inference using a tiny placeholder image.
     #[allow(dead_code)]
     pub async fn infer_text_only(

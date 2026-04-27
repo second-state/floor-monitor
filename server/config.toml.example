@@ -69,3 +69,4 @@ default_profile = "kid"
 summary_window_min = 30    # periodic summary pushed to Telegram (minutes, 0 to disable)
 alert_consecutive = 2      # consecutive high-risk frames before firing an alert
 alert_cooldown_sec = 120   # seconds between alerts for the same camera
+context_window_frames = 30 # recent scene descriptions injected into Q&A as short-term memory (0 to disable)

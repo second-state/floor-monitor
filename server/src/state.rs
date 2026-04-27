@@ -57,6 +57,21 @@ impl CameraState {
     pub fn has_capability(&self, cap: &str) -> bool {
         self.capabilities.iter().any(|c| c == cap)
     }
+
+    /// Build a chronological digest (oldest first) of the last `n` scene
+    /// descriptions. Used to give Q&A handlers short-term memory without
+    /// re-running VLM inference on past frames.
+    pub fn recent_context_digest(&self, n: usize) -> Vec<String> {
+        if n == 0 || self.results.is_empty() {
+            return Vec::new();
+        }
+        let len = self.results.len();
+        let start = len.saturating_sub(n);
+        self.results[start..]
+            .iter()
+            .map(|r| format!("{} {}", r.time, r.text))
+            .collect()
+    }
 }
 
 impl std::fmt::Debug for CameraState {

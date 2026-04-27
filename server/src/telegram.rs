@@ -462,15 +462,23 @@ async fn snapshot_reply(state: &AppState, notifier: &TelegramNotifier) {
 }
 
 async fn ask_visual(state: &AppState, question: &str) -> String {
+    let n = state.config.monitor.context_window_frames as usize;
     let cameras = state.cameras.read().await;
-    let frame = cameras.values().find_map(|c| c.latest_frame.clone());
+    let snapshot = cameras
+        .values()
+        .find(|c| c.latest_frame.is_some())
+        .map(|c| (c.latest_frame.clone().unwrap(), c.recent_context_digest(n)));
     drop(cameras);
 
-    let Some(jpeg) = frame else {
-        return "No frame available (no camera connected).".to_string();
+    let Some((jpeg, context)) = snapshot else {
+        return "The camera has no live frame, so I cannot chat right now.".to_string();
     };
 
-    match state.vlm.infer(&jpeg, question).await {
+    match state
+        .vlm
+        .infer_with_context(&jpeg, &context, question)
+        .await
+    {
         Ok((text, _)) => {
             if text.is_empty() {
                 "(Empty response from model)".to_string()

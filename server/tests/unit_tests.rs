@@ -160,6 +160,7 @@ fn test_alert_tracker_fires_after_consecutive() {
         summary_window_min: 30,
         alert_consecutive: 2,
         alert_cooldown_sec: 0.0, // no cooldown for test
+        context_window_frames: 30,
     };
     let mut tracker = floor_monitor_server::alert::AlertTracker::new(&config);
     let high_json = Some(
@@ -179,6 +180,7 @@ fn test_alert_tracker_resets_on_none() {
         summary_window_min: 30,
         alert_consecutive: 2,
         alert_cooldown_sec: 0.0,
+        context_window_frames: 30,
     };
     let mut tracker = floor_monitor_server::alert::AlertTracker::new(&config);
     let high =
@@ -200,6 +202,7 @@ fn test_alert_tracker_cooldown() {
         summary_window_min: 30,
         alert_consecutive: 1,
         alert_cooldown_sec: 9999.0, // very long cooldown
+        context_window_frames: 30,
     };
     let mut tracker = floor_monitor_server::alert::AlertTracker::new(&config);
     let high =
@@ -269,6 +272,85 @@ fn test_parse_intent_with_junk() {
     let raw = r#"Sure! Here's the result: {"intent":"patrol"} hope that helps"#;
     let intent = floor_monitor_server::llm::parse_intent(raw).unwrap();
     assert!(matches!(intent, floor_monitor_server::llm::Intent::Patrol));
+}
+
+// --- Context digest tests ---
+
+fn make_result(time: &str, text: &str) -> floor_monitor_server::state::FrameResult {
+    floor_monitor_server::state::FrameResult {
+        camera_id: "cam1".to_string(),
+        frame_no: 0,
+        time: time.to_string(),
+        infer_secs: 0.0,
+        model: "test".to_string(),
+        text: text.to_string(),
+        parsed_json: None,
+    }
+}
+
+#[test]
+fn test_recent_context_digest_takes_last_n_in_order() {
+    let mut cam =
+        floor_monitor_server::state::CameraState::new("cam1".to_string(), "Test".to_string());
+    cam.results = (1..=10)
+        .map(|i| make_result(&format!("12:00:{:02}", i), &format!("frame {}", i)))
+        .collect();
+
+    let digest = cam.recent_context_digest(3);
+    assert_eq!(digest.len(), 3);
+    assert_eq!(digest[0], "12:00:08 frame 8");
+    assert_eq!(digest[1], "12:00:09 frame 9");
+    assert_eq!(digest[2], "12:00:10 frame 10");
+}
+
+#[test]
+fn test_recent_context_digest_handles_short_history() {
+    let mut cam =
+        floor_monitor_server::state::CameraState::new("cam1".to_string(), "Test".to_string());
+    cam.results = vec![make_result("12:00:01", "only frame")];
+
+    let digest = cam.recent_context_digest(30);
+    assert_eq!(digest, vec!["12:00:01 only frame".to_string()]);
+}
+
+#[test]
+fn test_recent_context_digest_zero_or_empty() {
+    let cam = floor_monitor_server::state::CameraState::new("cam1".to_string(), "Test".to_string());
+    assert!(cam.recent_context_digest(30).is_empty());
+
+    let mut cam2 =
+        floor_monitor_server::state::CameraState::new("cam2".to_string(), "Test".to_string());
+    cam2.results = vec![make_result("12:00:01", "x")];
+    assert!(cam2.recent_context_digest(0).is_empty());
+}
+
+#[test]
+fn test_config_context_window_frames_default() {
+    let toml_str = r#"
+[server]
+port = 3456
+
+[vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+"#;
+    let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.monitor.context_window_frames, 30);
+}
+
+#[test]
+fn test_config_context_window_frames_override() {
+    let toml_str = r#"
+[server]
+port = 3456
+
+[vlm]
+api_url = "http://localhost:8000/v1/chat/completions"
+
+[monitor]
+context_window_frames = 5
+"#;
+    let config: floor_monitor_server::config::Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.monitor.context_window_frames, 5);
 }
 
 #[test]
