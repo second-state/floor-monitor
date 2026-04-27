@@ -295,12 +295,26 @@ function sendCommand(action, params) {
 }
 
 function downloadSnapshot() {
-    // Find the first camera preview image and open its snapshot URL
+    // Trigger a real download via an invisible <a download> click rather
+    // than window.open — popup blockers can turn window.open into an
+    // in-place navigation, which kills the dashboard's SSE stream.
     var img = document.querySelector(".preview-img");
-    if (img) {
-        var src = img.getAttribute("src").split("?")[0];
-        window.open(src, "_blank");
-    } else {
+    if (!img) {
         alert("No camera connected");
+        return;
     }
+    var src = img.getAttribute("src").split("?")[0];
+    // Cache-bust so we always grab the freshest frame, not a cached one.
+    var url = src + "?t=" + Date.now();
+    var camId = "snapshot";
+    var match = src.match(/\/api\/snapshot\/(.+)$/);
+    if (match) camId = match[1];
+    var ts = new Date().toISOString().replace(/[:.]/g, "-");
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = camId + "-" + ts + ".jpg";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
