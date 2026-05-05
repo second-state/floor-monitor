@@ -19,6 +19,7 @@ use tracing::info;
 pub mod detect;
 pub mod fake;
 pub mod noop;
+pub mod patrol;
 pub mod v4l2ctl;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

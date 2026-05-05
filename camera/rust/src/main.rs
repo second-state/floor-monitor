@@ -12,9 +12,11 @@
 //! For RTSP cameras, use the Python client.
 
 use base64::Engine;
-use floor_monitor_camera::commands::{drain_pending_commands, handle_command};
+use floor_monitor_camera::commands::{drain_pending_commands, handle_command, CommandCtx};
 use floor_monitor_camera::config::{load_config, Config};
-use floor_monitor_camera::ptz::{self, detect::resolve_advertised_capabilities, Ptz};
+use floor_monitor_camera::ptz::{
+    self, detect::resolve_advertised_capabilities, patrol::PatrolHandle, Ptz,
+};
 use futures_util::{SinkExt, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
@@ -106,6 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         resolve_advertised_capabilities(&config.camera.capabilities, ptz.capabilities());
     info!("PTZ caps advertised: {:?}", advertised_caps);
 
+    // Patrol task slot. Lives across reconnects so we can cancel any
+    // in-flight patrol when the WebSocket drops.
+    let mut patrol_slot: Option<PatrolHandle> = None;
+
     // Connection loop with auto-reconnect
     loop {
         info!("Connecting to {} ...", config.server.ws_url);
@@ -192,10 +198,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 break;
                                             }
                                             Some("command") => {
+                                                let mut ctx = CommandCtx {
+                                                    ptz: ptz.clone(),
+                                                    patrol_slot: &mut patrol_slot,
+                                                    patrol_cfg: &config.ptz.patrol,
+                                                };
                                                 handle_command(
                                                     &mut write,
                                                     &config.camera.id,
-                                                    &ptz,
+                                                    &mut ctx,
                                                     &data,
                                                 )
                                                 .await;
@@ -225,11 +236,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // Drain any commands queued behind the result.
+                            let mut ctx = CommandCtx {
+                                ptz: ptz.clone(),
+                                patrol_slot: &mut patrol_slot,
+                                patrol_cfg: &config.ptz.patrol,
+                            };
                             if !drain_pending_commands(
                                 &mut read,
                                 &mut write,
                                 &config.camera.id,
-                                &ptz,
+                                &mut ctx,
                             )
                             .await
                             {
@@ -252,6 +268,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 warn!("Connection failed: {} — retrying in 5s", e);
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
+        }
+
+        // Cancel any in-flight patrol before reconnect — the dashboard
+        // sees us as offline, so an orphan patrol moving the camera
+        // silently would be surprising.
+        if let Some(p) = patrol_slot.take() {
+            info!("Cancelling in-flight patrol due to disconnect");
+            p.cancel().await;
         }
     }
 }

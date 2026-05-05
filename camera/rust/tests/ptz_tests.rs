@@ -3,13 +3,14 @@
 //! `commands::dispatch` / `commands::build_ack` to verify protocol shape
 //! without standing up a real WebSocket.
 
-use floor_monitor_camera::commands::{build_ack, dispatch};
-use floor_monitor_camera::config::PtzConfig;
+use floor_monitor_camera::commands::{build_ack, dispatch, CommandCtx};
+use floor_monitor_camera::config::{PatrolConfig, PtzConfig};
 use floor_monitor_camera::ptz::{
     self,
     detect::parse_list_ctrls,
     fake::{FakePtz, PtzCall},
     noop::NoopPtz,
+    patrol::PatrolHandle,
     v4l2ctl::{FakeV4l2CtlRunner, V4l2CtlPtz},
     PanDir, Ptz, PtzCapabilities, PtzError, TiltDir,
 };
@@ -22,6 +23,29 @@ fn fake() -> Arc<FakePtz> {
         tilt: true,
         ..Default::default()
     }))
+}
+
+fn fast_patrol_cfg() -> PatrolConfig {
+    PatrolConfig {
+        sweep_steps: 1,
+        dwell_ms: 0,
+        return_home: false,
+    }
+}
+
+/// Build a `CommandCtx` for tests. The patrol slot is held in a
+/// caller-owned `Option<PatrolHandle>` so tests can reuse it across
+/// successive `dispatch` calls (mimicking the main loop).
+fn ctx<'a>(
+    ptz: Arc<dyn Ptz>,
+    slot: &'a mut Option<PatrolHandle>,
+    cfg: &'a PatrolConfig,
+) -> CommandCtx<'a> {
+    CommandCtx {
+        ptz,
+        patrol_slot: slot,
+        patrol_cfg: cfg,
+    }
 }
 
 // ---- Direction string mapping ----------------------------------------
@@ -91,17 +115,83 @@ async fn execute_ptz_missing_direction_returns_bad_direction_empty() {
 #[tokio::test]
 async fn dispatch_ptz_pan_left_with_noop_acks_success() {
     let p: Arc<dyn Ptz> = Arc::new(NoopPtz);
-    let (success, msg) = dispatch(&p, "ptz", &json!({"direction": "pan_left"})).await;
+    let mut slot = None;
+    let cfg = fast_patrol_cfg();
+    let mut c = ctx(p, &mut slot, &cfg);
+    let (success, msg) = dispatch(&mut c, "ptz", &json!({"direction": "pan_left"})).await;
     assert!(success);
     assert_eq!(msg, "pan_left ok");
 }
 
 #[tokio::test]
-async fn dispatch_patrol_with_noop_acks_success() {
+async fn dispatch_patrol_without_pan_capability_fails() {
+    // NoopPtz reports caps.pan = false → patrol should fail fast.
     let p: Arc<dyn Ptz> = Arc::new(NoopPtz);
-    let (success, msg) = dispatch(&p, "patrol", &json!({})).await;
+    let mut slot = None;
+    let cfg = fast_patrol_cfg();
+    let mut c = ctx(p, &mut slot, &cfg);
+    let (success, msg) = dispatch(&mut c, "patrol", &json!({})).await;
+    assert!(!success);
+    assert!(msg.contains("unsupported"));
+    assert!(slot.is_none());
+}
+
+#[tokio::test]
+async fn dispatch_patrol_starts_task_and_acks_started() {
+    let f = fake();
+    let p: Arc<dyn Ptz> = f.clone();
+    let mut slot: Option<PatrolHandle> = None;
+    let cfg = fast_patrol_cfg();
+    let mut c = ctx(p, &mut slot, &cfg);
+    let (success, msg) = dispatch(&mut c, "patrol", &json!({})).await;
     assert!(success);
-    assert!(msg.contains("patrol"));
+    assert_eq!(msg, "patrol_started");
+    assert!(slot.is_some());
+    // Wait for the patrol to finish naturally.
+    if let Some(h) = slot.take() {
+        h.join().await;
+    }
+    // sweep_steps=1 → 1 left + 2 right + 1 left = 4 calls.
+    assert_eq!(f.calls().len(), 4);
+}
+
+#[tokio::test]
+async fn dispatch_second_patrol_cancels_first() {
+    let f = fake();
+    let p: Arc<dyn Ptz> = f.clone();
+    let mut slot: Option<PatrolHandle> = None;
+    // Slow patrol so we can preempt it.
+    let cfg = PatrolConfig {
+        sweep_steps: 5,
+        dwell_ms: 100_000,
+        return_home: false,
+    };
+    let mut c = ctx(p.clone(), &mut slot, &cfg);
+    let _ = dispatch(&mut c, "patrol", &json!({})).await;
+    // Drop ctx so we can rebind; the patrol_slot lives across.
+    drop(c);
+    // Give the first patrol a moment to issue at least one pan.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let first_calls = f.calls().len();
+    // Send another patrol — should cancel the previous and start fresh.
+    let mut c2 = ctx(p, &mut slot, &cfg);
+    let (success, msg) = dispatch(&mut c2, "patrol", &json!({})).await;
+    drop(c2);
+    assert!(success);
+    assert_eq!(msg, "patrol_started");
+    // Cleanup the second handle so the test exits promptly.
+    if let Some(h) = slot.take() {
+        h.cancel().await;
+    }
+    // First patrol got at most a couple of pans before being cancelled,
+    // so total calls is bounded.
+    let total = f.calls().len();
+    assert!(
+        total >= first_calls && total < 100,
+        "expected bounded calls, got first={} total={}",
+        first_calls,
+        total
+    );
 }
 
 // ---- dispatch error paths -------------------------------------------
@@ -109,7 +199,10 @@ async fn dispatch_patrol_with_noop_acks_success() {
 #[tokio::test]
 async fn dispatch_unknown_action_acks_failure() {
     let p: Arc<dyn Ptz> = Arc::new(NoopPtz);
-    let (success, msg) = dispatch(&p, "dance", &json!({})).await;
+    let mut slot = None;
+    let cfg = fast_patrol_cfg();
+    let mut c = ctx(p, &mut slot, &cfg);
+    let (success, msg) = dispatch(&mut c, "dance", &json!({})).await;
     assert!(!success);
     assert_eq!(msg, "Unknown action: dance");
 }
@@ -118,7 +211,10 @@ async fn dispatch_unknown_action_acks_failure() {
 async fn dispatch_ptz_unknown_direction_acks_failure() {
     let f = fake();
     let p: Arc<dyn Ptz> = f.clone();
-    let (success, msg) = dispatch(&p, "ptz", &json!({"direction": "diagonal_warp"})).await;
+    let mut slot = None;
+    let cfg = fast_patrol_cfg();
+    let mut c = ctx(p, &mut slot, &cfg);
+    let (success, msg) = dispatch(&mut c, "ptz", &json!({"direction": "diagonal_warp"})).await;
     assert!(!success);
     assert!(msg.contains("diagonal_warp"));
     assert!(f.calls().is_empty());
@@ -129,7 +225,10 @@ async fn dispatch_ptz_when_trait_fails_acks_failure_with_error_text() {
     let f = fake();
     f.fail_next();
     let p: Arc<dyn Ptz> = f.clone();
-    let (success, msg) = dispatch(&p, "ptz", &json!({"direction": "pan_left"})).await;
+    let mut slot = None;
+    let cfg = fast_patrol_cfg();
+    let mut c = ctx(p, &mut slot, &cfg);
+    let (success, msg) = dispatch(&mut c, "ptz", &json!({"direction": "pan_left"})).await;
     assert!(!success);
     assert!(msg.contains("v4l2-ctl") || msg.contains("forced failure"));
     // The trait was still invoked once.
