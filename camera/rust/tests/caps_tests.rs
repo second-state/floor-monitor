@@ -1,11 +1,14 @@
 //! Parser + detection tests for `v4l2-ctl --list-ctrls` output.
 //!
-//! Three captured fixtures cover the realistic shape of the output:
+//! Four captured fixtures cover the realistic shape of the output:
 //!
-//! - `BCC950_LIKE` — Logitech BCC950: `pan_speed`/`tilt_speed` plus absolute
-//!   limits. Speed-mode is the BCC950's preferred control surface.
-//! - `C920_LIKE` — Logitech C920/C922: `pan_absolute`, `tilt_absolute`,
-//!   `zoom_absolute` (no relative).
+//! - `BCC950_LIKE` — Logitech BCC950 with both speed and absolute pan/tilt.
+//!   Real BCC950 firmware varies; this fixture is the "rich" case.
+//! - `C920_LIKE` — Logitech C920/C922: zoom-only. Per the issue and the
+//!   hardware verification log, real C920 cameras expose `zoom_absolute`
+//!   but no pan/tilt controls. Used as the negative case (advertise `[]`).
+//! - `BCC950_RELATIVE_ONLY` — relative pan/tilt only, the BCC950 path
+//!   most users see.
 //! - `NO_PTZ` — generic webcam: only `brightness`/`contrast`.
 
 use floor_monitor_camera::ptz::detect::{self, parse_list_ctrls, resolve_advertised_capabilities};
@@ -30,8 +33,6 @@ const C920_LIKE: &str = "
 User Controls
                      brightness 0x00980900 (int)    : min=0 max=255 step=1 default=128 value=128
 Camera Controls
-                   pan_absolute 0x009a0908 (int)    : min=-36000 max=36000 step=3600 default=0 value=0
-                  tilt_absolute 0x009a0909 (int)    : min=-36000 max=36000 step=3600 default=0 value=0
                   zoom_absolute 0x009a090d (int)    : min=100 max=500 step=1 default=100 value=100
 ";
 
@@ -70,11 +71,11 @@ fn parse_bcc950_extracts_min_max_step_for_pan_absolute() {
 }
 
 #[test]
-fn parse_c920_extracts_pan_tilt_zoom_absolute_only() {
+fn parse_c920_extracts_zoom_only() {
     let p = parse_list_ctrls(C920_LIKE);
-    assert!(p.has("pan_absolute"));
-    assert!(p.has("tilt_absolute"));
     assert!(p.has("zoom_absolute"));
+    assert!(!p.has("pan_absolute"));
+    assert!(!p.has("tilt_absolute"));
     assert!(!p.has("pan_relative"));
     assert!(!p.has("pan_speed"));
 }
@@ -131,15 +132,16 @@ fn caps_from_bcc950_advertises_ptz_and_patrol() {
 }
 
 #[test]
-fn caps_from_c920_advertises_ptz_and_patrol_includes_zoom() {
+fn caps_from_c920_zoom_only_advertises_nothing() {
+    // Real C920 has only zoom_absolute — no pan/tilt motors.
+    // Per docs/PTZ_HARDWARE_LOG.md this is the negative regression case:
+    // the server has no zoom UI/intent, so the camera should advertise [].
     let caps = PtzCapabilities::from_controls(&parse_list_ctrls(C920_LIKE));
-    assert!(caps.pan);
-    assert!(caps.tilt);
+    assert!(!caps.pan);
+    assert!(!caps.tilt);
     assert!(caps.zoom);
-    assert!(caps.home);
-    // Even though zoom is true, advertised() still only returns ptz/patrol
-    // because the server has no zoom intents/UI.
-    assert_eq!(caps.advertised(), vec!["ptz", "patrol"]);
+    assert!(!caps.home);
+    assert!(caps.advertised().is_empty());
 }
 
 #[test]
@@ -217,8 +219,10 @@ fn resolve_user_supplied_overrides_detected() {
 
 #[test]
 fn resolve_empty_user_uses_detected() {
+    // Detected pan AND tilt → advertises both wire caps.
     let detected = PtzCapabilities {
         pan: true,
+        tilt: true,
         ..Default::default()
     };
     let user: Vec<String> = vec![];
@@ -226,6 +230,19 @@ fn resolve_empty_user_uses_detected() {
         resolve_advertised_capabilities(&user, detected),
         vec!["ptz", "patrol"]
     );
+}
+
+#[test]
+fn resolve_empty_user_with_pan_only_advertises_nothing() {
+    // Pan-only is a negative case: server gates pan/tilt behind the same
+    // "ptz" capability, so advertising it would route tilt commands the
+    // camera can't drive.
+    let detected = PtzCapabilities {
+        pan: true,
+        ..Default::default()
+    };
+    let user: Vec<String> = vec![];
+    assert!(resolve_advertised_capabilities(&user, detected).is_empty());
 }
 
 #[test]

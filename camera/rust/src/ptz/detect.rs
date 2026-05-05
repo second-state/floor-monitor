@@ -91,13 +91,16 @@ pub fn parse_list_ctrls(output: &str) -> ParsedControls {
 impl PtzCapabilities {
     /// Derive hardware capabilities from a parsed control list. Decision rules:
     ///
-    /// - `pan_relative`, `pan_absolute`, or `pan_speed` present → `pan = true`.
+    /// - `pan_relative` OR `pan_absolute` present → `pan = true`. (Speed-mode
+    ///   controls like `pan_speed` are NOT counted: `V4l2CtlPtz` only knows
+    ///   how to drive relative and absolute, so advertising speed-only
+    ///   cameras as PTZ-capable would just produce `Unsupported` errors.)
     /// - Same scheme for tilt and zoom.
     /// - `home` is synthesizable when both `pan_absolute` and `tilt_absolute`
     ///   exist (write 0 to both).
     pub fn from_controls(p: &ParsedControls) -> Self {
-        let pan = p.has("pan_relative") || p.has("pan_absolute") || p.has("pan_speed");
-        let tilt = p.has("tilt_relative") || p.has("tilt_absolute") || p.has("tilt_speed");
+        let pan = p.has("pan_relative") || p.has("pan_absolute");
+        let tilt = p.has("tilt_relative") || p.has("tilt_absolute");
         let zoom = p.has("zoom_relative") || p.has("zoom_absolute");
         let home = p.has("pan_absolute") && p.has("tilt_absolute");
         Self {

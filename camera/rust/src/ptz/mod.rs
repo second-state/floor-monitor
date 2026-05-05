@@ -53,17 +53,19 @@ pub struct PtzCapabilities {
 
 impl PtzCapabilities {
     /// Translate hardware capabilities into the wire-level capability
-    /// strings the server filters on. Pan or tilt presence implies both
-    /// `"ptz"` and `"patrol"` (patrol is software-driven on top of pan/tilt).
-    /// Zoom-only cameras advertise nothing today because the server's UI
-    /// has no zoom buttons or intents yet.
+    /// strings the server filters on. Pan AND tilt must BOTH be present
+    /// to advertise `"ptz"`/`"patrol"`: the server gates all four
+    /// directional commands (`pan_left`/`pan_right`/`tilt_up`/`tilt_down`)
+    /// behind a single `"ptz"` capability, so a pan-only or tilt-only
+    /// device would silently receive commands it can't drive. Zoom-only
+    /// cameras also advertise nothing because the server has no zoom
+    /// UI/intent today.
     pub fn advertised(&self) -> Vec<String> {
-        let mut v = Vec::new();
-        if self.pan || self.tilt {
-            v.push("ptz".to_string());
-            v.push("patrol".to_string());
+        if self.pan && self.tilt {
+            vec!["ptz".to_string(), "patrol".to_string()]
+        } else {
+            Vec::new()
         }
-        v
     }
 }
 
@@ -170,21 +172,23 @@ mod tests {
     }
 
     #[test]
-    fn advertised_pan_only_includes_ptz_and_patrol() {
+    fn advertised_pan_only_is_empty() {
+        // Pan without tilt: server would still send tilt_up/tilt_down
+        // because the wire capability is the single "ptz" gate.
         let caps = PtzCapabilities {
             pan: true,
             ..Default::default()
         };
-        assert_eq!(caps.advertised(), vec!["ptz", "patrol"]);
+        assert!(caps.advertised().is_empty());
     }
 
     #[test]
-    fn advertised_tilt_only_includes_ptz_and_patrol() {
+    fn advertised_tilt_only_is_empty() {
         let caps = PtzCapabilities {
             tilt: true,
             ..Default::default()
         };
-        assert_eq!(caps.advertised(), vec!["ptz", "patrol"]);
+        assert!(caps.advertised().is_empty());
     }
 
     #[test]
@@ -195,5 +199,15 @@ mod tests {
             ..Default::default()
         };
         assert!(caps.advertised().is_empty());
+    }
+
+    #[test]
+    fn advertised_pan_and_tilt_includes_ptz_and_patrol() {
+        let caps = PtzCapabilities {
+            pan: true,
+            tilt: true,
+            ..Default::default()
+        };
+        assert_eq!(caps.advertised(), vec!["ptz", "patrol"]);
     }
 }
