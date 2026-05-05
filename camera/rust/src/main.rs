@@ -14,11 +14,13 @@
 use base64::Engine;
 use floor_monitor_camera::commands::{drain_pending_commands, handle_command};
 use floor_monitor_camera::config::{load_config, Config};
+use floor_monitor_camera::ptz::{noop::NoopPtz, Ptz};
 use futures_util::{SinkExt, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{error, info, warn};
@@ -96,6 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let interval = Duration::from_secs_f64(config.camera.interval);
+
+    // PTZ controller. Default impl is NoopPtz so behavior matches today;
+    // later commits select V4l2CtlPtz on Linux when capabilities are detected.
+    let ptz: Arc<dyn Ptz> = Arc::new(NoopPtz);
 
     // Connection loop with auto-reconnect
     loop {
@@ -186,6 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 handle_command(
                                                     &mut write,
                                                     &config.camera.id,
+                                                    &ptz,
                                                     &data,
                                                 )
                                                 .await;
@@ -215,8 +222,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // Drain any commands queued behind the result.
-                            if !drain_pending_commands(&mut read, &mut write, &config.camera.id)
-                                .await
+                            if !drain_pending_commands(
+                                &mut read,
+                                &mut write,
+                                &config.camera.id,
+                                &ptz,
+                            )
+                            .await
                             {
                                 break;
                             }
