@@ -61,8 +61,9 @@ For technical pitfalls behind these decisions, always consult **KNOWLEDGE.md** f
 
 ### Camera Client
 
-- **Shared config format** — Both Python and Rust clients must read the same `camera.toml` file. Do not add Python-only or Rust-only config keys without a documented fallback.
+- **Shared config format** — Both Python and Rust clients must read the same `camera.toml` file. Do not add Python-only or Rust-only config keys without a documented fallback. The new `[ptz]` and `[ptz.patrol]` blocks are Rust-only extensions; Python ignores them silently.
 - **Auto-reconnect** — Camera clients must handle server disconnections gracefully with backoff retry.
+- **Library/binary split (Rust client)** — Protocol code lives in `floor_monitor_camera` (lib); the binary glue with `nokhwa` lives in `main.rs` behind the `camera` feature flag. Run `cargo test --no-default-features` from `camera/rust/` to test the lib without webcam system libs (matches the CI configuration).
 
 For Rust/Cargo, Axum, and WebSocket-specific rules, see **KNOWLEDGE.md**.
 
@@ -161,9 +162,26 @@ floor-monitor/
 │   │   ├── camera_client.py
 │   │   └── requirements.txt
 │   └── rust/
-│       ├── Cargo.toml
-│       └── src/main.rs
-├── .github/workflows/ci.yml   # CI: fmt, clippy, build, test, e2e
+│       ├── Cargo.toml         # [features] camera = nokhwa+image+base64
+│       ├── src/
+│       │   ├── lib.rs         # protocol library (no nokhwa)
+│       │   ├── main.rs        # binary, requires `camera` feature
+│       │   ├── config.rs      # Config + PtzConfig + PatrolConfig
+│       │   ├── commands.rs    # dispatch, handle_command, CommandCtx
+│       │   └── ptz/
+│       │       ├── mod.rs     # Ptz trait, build(), execute_ptz()
+│       │       ├── noop.rs    # always-success no-op (default fallback)
+│       │       ├── fake.rs    # call-recording test double
+│       │       ├── detect.rs  # v4l2-ctl --list-ctrls parser
+│       │       ├── v4l2ctl.rs # V4l2CtlRunner trait + V4l2CtlPtz
+│       │       └── patrol.rs  # cancellable patrol task
+│       └── tests/
+│           ├── ptz_tests.rs   # trait dispatch + V4l2CtlPtz + patrol
+│           ├── caps_tests.rs  # parser fixtures + capability inference
+│           └── config_tests.rs # [ptz] block parsing
+├── docs/
+│   └── PTZ_HARDWARE_LOG.md    # Verified-hardware matrix (manual bench)
+├── .github/workflows/ci.yml   # CI: fmt, clippy, build, test, e2e + camera-rust-*
 ├── CLAUDE.md                  # This file
 ├── KNOWLEDGE.md               # Technical pitfalls and learnings
 └── README.md                  # User-facing documentation
