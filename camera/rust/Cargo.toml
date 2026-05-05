@@ -4,6 +4,22 @@ version = "0.1.0"
 edition = "2021"
 description = "Camera client for floor-monitor — captures frames and streams to server via WebSocket"
 
+[lib]
+name = "floor_monitor_camera"
+path = "src/lib.rs"
+
+[[bin]]
+name = "floor-monitor-camera"
+path = "src/main.rs"
+required-features = ["camera"]
+
+[features]
+default = ["camera"]
+# `camera` pulls in the webcam capture stack (nokhwa + image encoding).
+# Disable with `--no-default-features` to build/test the pure-Rust
+# library half without Linux V4L2 system libraries.
+camera = ["dep:nokhwa", "dep:image", "dep:base64"]
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
@@ -11,9 +27,14 @@ futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-nokhwa = { version = "0.10", features = ["input-native"] }
-image = { version = "0.25", features = ["jpeg"] }
 url = "2"
+
+# Optional — only needed by the binary that captures frames from a webcam.
+nokhwa = { version = "0.10", features = ["input-native"], optional = true }
+image = { version = "0.25", features = ["jpeg"], optional = true }
+base64 = { version = "0.22", optional = true }
+
+[profile.dev.package."*"]
+debug = false
