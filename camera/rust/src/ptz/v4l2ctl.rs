@@ -1,4 +1,5 @@
-//! `v4l2-ctl` subprocess runner trait + implementations.
+//! `v4l2-ctl` subprocess runner trait + implementations + the
+//! [`V4l2CtlPtz`] controller that drives real UVC PTZ hardware.
 //!
 //! - [`V4l2CtlRunner`] is the trait the rest of the PTZ code depends on.
 //! - [`RealRunner`] (Linux only) shells out to `tokio::process::Command`.
@@ -6,16 +7,32 @@
 //!   and returns canned responses popped from a `VecDeque`. Tests use it
 //!   to exercise both the parser and the dispatch logic without ever
 //!   touching a real binary.
+//! - [`V4l2CtlPtz`] selects per-axis between relative-mode and
+//!   absolute-mode based on detected controls and translates pan/tilt
+//!   commands into `--set-ctrl=...` invocations.
 
-use super::PtzError;
+use super::detect::{ControlRange, ParsedControls};
+use super::{PanDir, Ptz, PtzCapabilities, PtzError, TiltDir};
+use crate::config::PtzConfig;
 use async_trait::async_trait;
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[async_trait]
 pub trait V4l2CtlRunner: Send + Sync {
     /// Invoke `v4l2-ctl` with the given args. Returns stdout on success.
     async fn run(&self, args: &[&str]) -> Result<String, PtzError>;
+}
+
+/// `Arc<R>` is a `V4l2CtlRunner` whenever `R` is, so tests can hold an
+/// `Arc<FakeV4l2CtlRunner>` for inspection while passing a clone into
+/// `V4l2CtlPtz::new` for ownership.
+#[async_trait]
+impl<R: V4l2CtlRunner + ?Sized> V4l2CtlRunner for Arc<R> {
+    async fn run(&self, args: &[&str]) -> Result<String, PtzError> {
+        (**self).run(args).await
+    }
 }
 
 /// Production runner. Spawns `v4l2-ctl` via `tokio::process::Command`
@@ -100,6 +117,159 @@ impl V4l2CtlRunner for FakeV4l2CtlRunner {
             .expect("FakeV4l2CtlRunner mutex poisoned");
         // If the test didn't push enough responses, default to empty stdout.
         q.pop_front().unwrap_or_else(|| Ok(String::new()))
+    }
+}
+
+// ---- V4l2CtlPtz -----------------------------------------------------
+
+/// Per-axis control mode chosen at startup from the parsed v4l2 controls.
+/// Relative wins over absolute (BCC950 needs relative; absolute requires
+/// us to track position which is fragile if another tool also drives the
+/// camera).
+#[derive(Debug)]
+pub enum AxisCtrl {
+    /// No supported control on this axis. `pan`/`tilt` will return
+    /// [`PtzError::Unsupported`].
+    None,
+    /// `pan_relative` / `tilt_relative` available. We send `±1` per click;
+    /// the camera firmware decides how far one detent is.
+    Relative,
+    /// `pan_absolute` / `tilt_absolute` available. We track the current
+    /// position in `current` and write `current ± step` clamped to `range`.
+    Absolute {
+        current: AtomicI32,
+        range: ControlRange,
+    },
+}
+
+impl AxisCtrl {
+    /// Inspect parsed controls for the given axis (`"pan"` or `"tilt"`)
+    /// and choose the best mode.
+    pub fn from_parsed(prefix: &str, p: &ParsedControls) -> Self {
+        let rel = format!("{}_relative", prefix);
+        if p.has(&rel) {
+            return Self::Relative;
+        }
+        let abs = format!("{}_absolute", prefix);
+        if p.has(&abs) {
+            let range = p.range(&abs).unwrap_or(ControlRange {
+                min: i32::MIN / 2,
+                max: i32::MAX / 2,
+                step: 1,
+            });
+            return Self::Absolute {
+                current: AtomicI32::new(0),
+                range,
+            };
+        }
+        Self::None
+    }
+}
+
+/// Drives UVC PTZ hardware via `v4l2-ctl --set-ctrl=...`. Generic over the
+/// runner so tests can inject [`FakeV4l2CtlRunner`]. Production code uses
+/// `V4l2CtlPtz<RealRunner>` (Linux only).
+#[derive(Debug)]
+pub struct V4l2CtlPtz<R: V4l2CtlRunner> {
+    runner: R,
+    device: String,
+    pan: AxisCtrl,
+    tilt: AxisCtrl,
+    pan_step: i32,
+    tilt_step: i32,
+    invert_pan: bool,
+    invert_tilt: bool,
+    caps: PtzCapabilities,
+}
+
+impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
+    pub fn new(runner: R, device: String, parsed: &ParsedControls, cfg: &PtzConfig) -> Self {
+        Self {
+            runner,
+            device,
+            pan: AxisCtrl::from_parsed("pan", parsed),
+            tilt: AxisCtrl::from_parsed("tilt", parsed),
+            pan_step: cfg.pan_step,
+            tilt_step: cfg.tilt_step,
+            invert_pan: cfg.invert_pan,
+            invert_tilt: cfg.invert_tilt,
+            caps: PtzCapabilities::from_controls(parsed),
+        }
+    }
+
+    /// Per-axis dispatch. Splits the runner call out so `pan`/`tilt`
+    /// stay a one-liner each.
+    async fn drive_axis(
+        &self,
+        axis: &AxisCtrl,
+        ctrl_prefix: &'static str,
+        sign: i32,
+        step: i32,
+    ) -> Result<(), PtzError> {
+        match axis {
+            AxisCtrl::None => Err(PtzError::Unsupported(ctrl_prefix)),
+            AxisCtrl::Relative => {
+                let arg = format!("--set-ctrl={}_relative={}", ctrl_prefix, sign);
+                self.runner.run(&["-d", &self.device, &arg]).await?;
+                Ok(())
+            }
+            AxisCtrl::Absolute { current, range } => {
+                let prev = current.load(Ordering::SeqCst);
+                let next = (prev + sign * step).clamp(range.min, range.max);
+                let arg = format!("--set-ctrl={}_absolute={}", ctrl_prefix, next);
+                self.runner.run(&["-d", &self.device, &arg]).await?;
+                current.store(next, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl<R: V4l2CtlRunner + 'static> Ptz for V4l2CtlPtz<R> {
+    fn capabilities(&self) -> PtzCapabilities {
+        self.caps
+    }
+
+    async fn pan(&self, dir: PanDir) -> Result<(), PtzError> {
+        let base = match dir {
+            PanDir::Left => -1,
+            PanDir::Right => 1,
+        };
+        let sign = if self.invert_pan { -base } else { base };
+        self.drive_axis(&self.pan, "pan", sign, self.pan_step).await
+    }
+
+    async fn tilt(&self, dir: TiltDir) -> Result<(), PtzError> {
+        let base = match dir {
+            TiltDir::Up => 1,
+            TiltDir::Down => -1,
+        };
+        let sign = if self.invert_tilt { -base } else { base };
+        self.drive_axis(&self.tilt, "tilt", sign, self.tilt_step)
+            .await
+    }
+
+    async fn home(&self) -> Result<(), PtzError> {
+        let pan_abs = matches!(self.pan, AxisCtrl::Absolute { .. });
+        let tilt_abs = matches!(self.tilt, AxisCtrl::Absolute { .. });
+        if !pan_abs || !tilt_abs {
+            return Err(PtzError::Unsupported("home"));
+        }
+        self.runner
+            .run(&[
+                "-d",
+                &self.device,
+                "--set-ctrl=pan_absolute=0,tilt_absolute=0",
+            ])
+            .await?;
+        if let AxisCtrl::Absolute { current, .. } = &self.pan {
+            current.store(0, Ordering::SeqCst);
+        }
+        if let AxisCtrl::Absolute { current, .. } = &self.tilt {
+            current.store(0, Ordering::SeqCst);
+        }
+        Ok(())
     }
 }
 

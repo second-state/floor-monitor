@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use tracing::info;
 
 pub mod detect;
 pub mod fake;
@@ -92,6 +93,46 @@ pub trait Ptz: Send + Sync {
     async fn home(&self) -> Result<(), PtzError> {
         Err(PtzError::Unsupported("home"))
     }
+}
+
+/// Construct the appropriate [`Ptz`] implementation for this host. On
+/// Linux, probes `v4l2-ctl --list-ctrls` for pan/tilt controls and
+/// returns a [`v4l2ctl::V4l2CtlPtz`] when something supported is found.
+/// Falls back to [`noop::NoopPtz`] on macOS, on Linux without v4l-utils,
+/// when detection fails, or when `cfg.enabled = false`.
+pub async fn build(
+    cfg: &crate::config::PtzConfig,
+    camera_cfg: &crate::config::CameraConfig,
+) -> Arc<dyn Ptz> {
+    if !cfg.enabled {
+        info!("PTZ disabled in config; using NoopPtz");
+        return Arc::new(noop::NoopPtz);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let device = crate::config::device_path(camera_cfg, cfg);
+        let runner = v4l2ctl::RealRunner;
+        let args = ["-d", device.as_str(), "--list-ctrls"];
+        match v4l2ctl::V4l2CtlRunner::run(&runner, &args).await {
+            Ok(out) => {
+                let parsed = detect::parse_list_ctrls(&out);
+                let caps = PtzCapabilities::from_controls(&parsed);
+                if caps.pan || caps.tilt {
+                    info!("PTZ: detected on {} (caps {:?})", device, caps);
+                    return Arc::new(v4l2ctl::V4l2CtlPtz::new(runner, device, &parsed, cfg));
+                }
+                info!("PTZ: {} has no pan/tilt controls; using NoopPtz", device);
+            }
+            Err(e) => {
+                info!(
+                    "PTZ: v4l2-ctl probe of {} failed ({}); using NoopPtz",
+                    device, e
+                );
+            }
+        }
+    }
+    let _ = camera_cfg;
+    Arc::new(noop::NoopPtz)
 }
 
 /// Dispatch a `ptz` action's `direction` string to the appropriate trait

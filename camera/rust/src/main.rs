@@ -14,7 +14,7 @@
 use base64::Engine;
 use floor_monitor_camera::commands::{drain_pending_commands, handle_command};
 use floor_monitor_camera::config::{load_config, Config};
-use floor_monitor_camera::ptz::{noop::NoopPtz, Ptz};
+use floor_monitor_camera::ptz::{self, detect::resolve_advertised_capabilities, Ptz};
 use futures_util::{SinkExt, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
@@ -99,9 +99,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let interval = Duration::from_secs_f64(config.camera.interval);
 
-    // PTZ controller. Default impl is NoopPtz so behavior matches today;
-    // later commits select V4l2CtlPtz on Linux when capabilities are detected.
-    let ptz: Arc<dyn Ptz> = Arc::new(NoopPtz);
+    // PTZ controller. On Linux with detected pan/tilt controls this is
+    // V4l2CtlPtz; everywhere else it's NoopPtz (acks but doesn't move).
+    let ptz: Arc<dyn Ptz> = ptz::build(&config.ptz, &config.camera).await;
+    let advertised_caps =
+        resolve_advertised_capabilities(&config.camera.capabilities, ptz.capabilities());
+    info!("PTZ caps advertised: {:?}", advertised_caps);
 
     // Connection loop with auto-reconnect
     loop {
@@ -116,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "type": "register",
                     "camera_id": config.camera.id,
                     "name": config.camera.name,
-                    "capabilities": config.camera.capabilities,
+                    "capabilities": advertised_caps,
                 });
                 if let Err(e) = write.send(Message::Text(register.to_string().into())).await {
                     warn!("Failed to send register: {}", e);
