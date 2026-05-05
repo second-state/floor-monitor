@@ -27,5 +27,39 @@ jpeg_quality = 85
 
 # Capabilities this camera supports. The server uses these to decide
 # whether to send movement commands. Common values: "ptz", "patrol".
-# Leave empty for fixed cameras (e.g. Mac built-in webcam).
+# Leave empty (or omit) for fixed cameras (e.g. Mac built-in webcam).
+#
+# When this field is empty, the Rust client auto-detects capabilities by
+# probing `v4l2-ctl --list-ctrls` on Linux. Set it explicitly to override
+# detection (force a capability for testing, or suppress a buggy parse).
 # capabilities = ["ptz", "patrol"]
+
+# ----- PTZ controller (Rust client only) -----
+# Linux-only. macOS/Windows fall back to NoopPtz (acks but doesn't move).
+# Omit this entire section to use defaults.
+[ptz]
+# Master switch. Set to false to force NoopPtz even if v4l2-ctl detects
+# pan/tilt controls.
+enabled = true
+
+# Override the V4L2 device path. Defaults to /dev/video{device_index}.
+# device = "/dev/video0"
+
+# Step size for one button press, in V4L2 units. Used by absolute-mode
+# cameras. Relative-mode cameras (e.g. BCC950) take ±1 and ignore step.
+pan_step = 3600
+tilt_step = 1800
+
+# Invert axis sign if the camera moves the opposite direction from
+# expected. Reference convention: pan_left = negative pan delta,
+# tilt_up = positive tilt delta.
+invert_pan = false
+invert_tilt = false
+
+[ptz.patrol]
+# Number of pan steps per side before reversing.
+sweep_steps = 3
+# Pause at each end of the sweep, in milliseconds.
+dwell_ms = 800
+# Return to (0,0) after the sweep if absolute controls are available.
+return_home = true
