@@ -134,6 +134,29 @@ jobs:
             --fail-under-lines 80 \
             -- --nocapture
 
+  # Type-check the default-feature binary (main.rs + nokhwa). The other
+  # camera-rust-* jobs use --no-default-features to skip nokhwa's V4L2
+  # system-lib requirements, which means main.rs is otherwise never
+  # compiled in CI — a typo there would slip through. `cargo check`
+  # avoids the full link cost; libclang is needed because nokhwa-bindings
+  # -linux uses bindgen to generate V4L2 bindings.
+  camera-rust-build-bin:
+    name: Camera (Rust) binary type-check
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install nokhwa system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev libv4l-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: camera/rust
+      - name: cargo check --release (default features)
+        working-directory: camera/rust
+        run: cargo check --release
+
   # --- Python camera client checks ---
   python-lint:
     name: Python lint
