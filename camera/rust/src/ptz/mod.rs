@@ -15,8 +15,10 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
+pub mod detect;
 pub mod fake;
 pub mod noop;
+pub mod v4l2ctl;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanDir {
