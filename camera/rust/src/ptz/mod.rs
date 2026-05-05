@@ -141,6 +141,13 @@ pub async fn build(
 /// Dispatch a `ptz` action's `direction` string to the appropriate trait
 /// method. Returns a short human-readable success message on `Ok` for the
 /// `command_ack` payload.
+///
+/// Zoom directions are intentionally **not** routed: the issue declares
+/// zoom out of scope today (no UI button or LLM intent emits `zoom_in`/
+/// `zoom_out`), and `V4l2CtlPtz` doesn't override `Ptz::zoom`, so any
+/// `zoom_*` direction would unconditionally fail with `Unsupported`.
+/// Treat zoom strings as unknown directions until the server-side
+/// vocabulary catches up.
 pub async fn execute_ptz(
     ptz: &Arc<dyn Ptz>,
     params: &serde_json::Value,
@@ -154,8 +161,6 @@ pub async fn execute_ptz(
         "pan_right" => ptz.pan(PanDir::Right).await.map(|_| "pan_right ok".into()),
         "tilt_up" => ptz.tilt(TiltDir::Up).await.map(|_| "tilt_up ok".into()),
         "tilt_down" => ptz.tilt(TiltDir::Down).await.map(|_| "tilt_down ok".into()),
-        "zoom_in" => ptz.zoom(ZoomDir::In).await.map(|_| "zoom_in ok".into()),
-        "zoom_out" => ptz.zoom(ZoomDir::Out).await.map(|_| "zoom_out ok".into()),
         "home" => ptz.home().await.map(|_| "home ok".into()),
         other => Err(PtzError::BadDirection(other.to_string())),
     }
