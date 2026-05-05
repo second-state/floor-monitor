@@ -358,6 +358,23 @@ async fn absolute_pan_left_writes_negative_step() {
 }
 
 #[tokio::test]
+async fn absolute_initial_position_seeded_from_v4l2_value() {
+    // Camera left at pan_absolute=14400 from a previous session. First
+    // pan_left should write 14400 - 3600 = 10800, NOT -3600 (which would
+    // be the case if we assumed the camera starts at 0).
+    const PRESET: &str = "
+                   pan_absolute 0x009a0908 (int) : min=-36000 max=36000 step=3600 default=0 value=14400
+                  tilt_absolute 0x009a0909 (int) : min=-18000 max=18000 step=1800 default=0 value=-3600
+";
+    let h = harness(PRESET, cfg());
+    h.ptz.pan(PanDir::Left).await.unwrap();
+    assert_eq!(h.runner.captured()[0][2], "--set-ctrl=pan_absolute=10800");
+    h.ptz.tilt(TiltDir::Up).await.unwrap();
+    // tilt: -3600 + 1800 (default tilt_step) = -1800
+    assert_eq!(h.runner.captured()[1][2], "--set-ctrl=tilt_absolute=-1800");
+}
+
+#[tokio::test]
 async fn absolute_pan_left_twice_tracks_position() {
     let h = harness(ABSOLUTE_CTRLS, cfg());
     h.ptz.pan(PanDir::Left).await.unwrap();

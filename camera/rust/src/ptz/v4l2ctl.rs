@@ -16,8 +16,8 @@ use super::{PanDir, Ptz, PtzCapabilities, PtzError, TiltDir};
 use crate::config::PtzConfig;
 use async_trait::async_trait;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::Mutex as AsyncMutex;
 
 #[async_trait]
 pub trait V4l2CtlRunner: Send + Sync {
@@ -67,8 +67,8 @@ impl V4l2CtlRunner for RealRunner {
 /// for a single canned reply, or push more via [`FakeV4l2CtlRunner::push`].
 #[derive(Debug, Default)]
 pub struct FakeV4l2CtlRunner {
-    captured: Mutex<Vec<Vec<String>>>,
-    responses: Mutex<VecDeque<Result<String, PtzError>>>,
+    captured: StdMutex<Vec<Vec<String>>>,
+    responses: StdMutex<VecDeque<Result<String, PtzError>>>,
 }
 
 impl FakeV4l2CtlRunner {
@@ -136,15 +136,21 @@ pub enum AxisCtrl {
     Relative,
     /// `pan_absolute` / `tilt_absolute` available. We track the current
     /// position in `current` and write `current ± step` clamped to `range`.
+    /// The `tokio::sync::Mutex` serializes the (read-prev, write-cmd,
+    /// update-tracking) triple so concurrent calls (e.g. patrol on a
+    /// spawned task plus a user-issued pan from the WS loop) can't race.
     Absolute {
-        current: AtomicI32,
+        current: AsyncMutex<i32>,
         range: ControlRange,
     },
 }
 
 impl AxisCtrl {
     /// Inspect parsed controls for the given axis (`"pan"` or `"tilt"`)
-    /// and choose the best mode.
+    /// and choose the best mode. For absolute mode, seeds the tracked
+    /// position from the camera's current `value=N` so the first command
+    /// after startup moves one step from where the lens actually is —
+    /// not from a synthetic zero.
     pub fn from_parsed(prefix: &str, p: &ParsedControls) -> Self {
         let rel = format!("{}_relative", prefix);
         if p.has(&rel) {
@@ -157,8 +163,9 @@ impl AxisCtrl {
                 max: i32::MAX / 2,
                 step: 1,
             });
+            let initial = p.value(&abs).unwrap_or(0);
             return Self::Absolute {
-                current: AtomicI32::new(0),
+                current: AsyncMutex::new(initial),
                 range,
             };
         }
@@ -198,7 +205,10 @@ impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
     }
 
     /// Per-axis dispatch. Splits the runner call out so `pan`/`tilt`
-    /// stay a one-liner each.
+    /// stay a one-liner each. Absolute mode holds the position lock
+    /// across the subprocess await so a concurrent call (e.g. patrol
+    /// from a spawned task + a user pan from the WS loop) waits its
+    /// turn instead of computing from a stale `prev`.
     async fn drive_axis(
         &self,
         axis: &AxisCtrl,
@@ -214,11 +224,11 @@ impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
                 Ok(())
             }
             AxisCtrl::Absolute { current, range } => {
-                let prev = current.load(Ordering::SeqCst);
-                let next = (prev + sign * step).clamp(range.min, range.max);
+                let mut guard = current.lock().await;
+                let next = (*guard + sign * step).clamp(range.min, range.max);
                 let arg = format!("--set-ctrl={}_absolute={}", ctrl_prefix, next);
                 self.runner.run(&["-d", &self.device, &arg]).await?;
-                current.store(next, Ordering::SeqCst);
+                *guard = next;
                 Ok(())
             }
         }
@@ -251,11 +261,16 @@ impl<R: V4l2CtlRunner + 'static> Ptz for V4l2CtlPtz<R> {
     }
 
     async fn home(&self) -> Result<(), PtzError> {
-        let pan_abs = matches!(self.pan, AxisCtrl::Absolute { .. });
-        let tilt_abs = matches!(self.tilt, AxisCtrl::Absolute { .. });
-        if !pan_abs || !tilt_abs {
+        let (AxisCtrl::Absolute { current: pan, .. }, AxisCtrl::Absolute { current: tilt, .. }) =
+            (&self.pan, &self.tilt)
+        else {
             return Err(PtzError::Unsupported("home"));
-        }
+        };
+        // Acquire both axis locks before the subprocess call. Lock order
+        // (pan → tilt) is fixed so concurrent home + pan + tilt cannot
+        // deadlock; only these two locks exist on this controller.
+        let mut pan_guard = pan.lock().await;
+        let mut tilt_guard = tilt.lock().await;
         self.runner
             .run(&[
                 "-d",
@@ -263,12 +278,8 @@ impl<R: V4l2CtlRunner + 'static> Ptz for V4l2CtlPtz<R> {
                 "--set-ctrl=pan_absolute=0,tilt_absolute=0",
             ])
             .await?;
-        if let AxisCtrl::Absolute { current, .. } = &self.pan {
-            current.store(0, Ordering::SeqCst);
-        }
-        if let AxisCtrl::Absolute { current, .. } = &self.tilt {
-            current.store(0, Ordering::SeqCst);
-        }
+        *pan_guard = 0;
+        *tilt_guard = 0;
         Ok(())
     }
 }

@@ -71,6 +71,23 @@ fn parse_bcc950_extracts_min_max_step_for_pan_absolute() {
 }
 
 #[test]
+fn parse_extracts_current_value_when_present() {
+    let fixture = "
+                   pan_absolute 0x009a0908 (int) : min=-36000 max=36000 step=3600 default=0 value=14400
+                  tilt_absolute 0x009a0909 (int) : min=-18000 max=18000 step=1800 default=0 value=-3600
+";
+    let p = parse_list_ctrls(fixture);
+    assert_eq!(p.value("pan_absolute"), Some(14400));
+    assert_eq!(p.value("tilt_absolute"), Some(-3600));
+}
+
+#[test]
+fn parse_value_absent_returns_none() {
+    let p = parse_list_ctrls("");
+    assert_eq!(p.value("pan_absolute"), None);
+}
+
+#[test]
 fn parse_c920_extracts_zoom_only() {
     let p = parse_list_ctrls(C920_LIKE);
     assert!(p.has("zoom_absolute"));

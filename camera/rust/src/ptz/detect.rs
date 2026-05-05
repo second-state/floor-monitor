@@ -20,6 +20,10 @@ pub struct ControlRange {
 pub struct ParsedControls {
     pub names: HashSet<String>,
     pub ranges: HashMap<String, ControlRange>,
+    /// Per-control current `value=N` from the v4l2-ctl output. Used to
+    /// seed absolute-mode position tracking — without this we'd assume
+    /// the camera is at 0 even when another tool left it elsewhere.
+    pub values: HashMap<String, i32>,
 }
 
 impl ParsedControls {
@@ -30,6 +34,10 @@ impl ParsedControls {
     pub fn range(&self, name: &str) -> Option<ControlRange> {
         self.ranges.get(name).copied()
     }
+
+    pub fn value(&self, name: &str) -> Option<i32> {
+        self.values.get(name).copied()
+    }
 }
 
 /// Parse `v4l2-ctl --list-ctrls` stdout. Tolerant: ignores blank lines,
@@ -38,6 +46,7 @@ impl ParsedControls {
 pub fn parse_list_ctrls(output: &str) -> ParsedControls {
     let mut names = HashSet::new();
     let mut ranges = HashMap::new();
+    let mut values = HashMap::new();
 
     for line in output.lines() {
         let trimmed = line.trim();
@@ -71,6 +80,7 @@ pub fn parse_list_ctrls(output: &str) -> ParsedControls {
         let mut min = None;
         let mut max = None;
         let mut step = None;
+        let mut value = None;
         for tok in trimmed.split_whitespace() {
             if let Some(v) = tok.strip_prefix("min=") {
                 min = v.parse::<i32>().ok();
@@ -78,14 +88,23 @@ pub fn parse_list_ctrls(output: &str) -> ParsedControls {
                 max = v.parse::<i32>().ok();
             } else if let Some(v) = tok.strip_prefix("step=") {
                 step = v.parse::<i32>().ok();
+            } else if let Some(v) = tok.strip_prefix("value=") {
+                value = v.parse::<i32>().ok();
             }
         }
         if let (Some(min), Some(max), Some(step)) = (min, max, step) {
             ranges.insert(name.to_string(), ControlRange { min, max, step });
         }
+        if let Some(v) = value {
+            values.insert(name.to_string(), v);
+        }
     }
 
-    ParsedControls { names, ranges }
+    ParsedControls {
+        names,
+        ranges,
+        values,
+    }
 }
 
 impl PtzCapabilities {
