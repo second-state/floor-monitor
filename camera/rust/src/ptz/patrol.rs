@@ -89,9 +89,20 @@ async fn run_patrol(ptz: Arc<dyn Ptz>, cfg: PatrolConfig, cancel: CancellationTo
     }
 
     if cfg.return_home {
-        match ptz.home().await {
-            Ok(()) => info!("patrol: returned to home"),
-            Err(e) => info!("patrol: home not supported ({}); leaving at center", e),
+        if cancel.is_cancelled() {
+            info!("patrol: cancelled before home");
+        } else {
+            // Race cancel against home(): if cancellation lands while
+            // the v4l2-ctl subprocess is in flight, dropping the home()
+            // future drops the Child, which kills the subprocess (via
+            // kill_on_drop). No "one final motor move after cancel".
+            tokio::select! {
+                _ = cancel.cancelled() => info!("patrol: cancelled during home"),
+                result = ptz.home() => match result {
+                    Ok(()) => info!("patrol: returned to home"),
+                    Err(e) => info!("patrol: home not supported ({}); leaving at center", e),
+                }
+            }
         }
     }
     info!("patrol: complete");
@@ -110,7 +121,17 @@ async fn sweep(
         if cancel.is_cancelled() {
             return false;
         }
-        if let Err(e) = ptz.pan(dir).await {
+        // Race cancel against the pan() future itself. A bare
+        // is_cancelled() check before pan() leaves a TOCTOU window
+        // where cancellation observed during the await still completes
+        // a motor move. With select!, dropping the pan future on
+        // cancel also drops the v4l2-ctl Child (kill_on_drop=true),
+        // so the underlying subprocess gets killed too.
+        let pan_result = tokio::select! {
+            _ = cancel.cancelled() => return false,
+            res = ptz.pan(dir) => res,
+        };
+        if let Err(e) = pan_result {
             warn!("patrol: pan failed ({}); aborting", e);
             return false;
         }
@@ -260,6 +281,67 @@ mod tests {
             (1..=2).contains(&n),
             "expected 1 or 2 pans before cancel, got {}",
             n
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_during_pan_await_aborts_before_record() {
+        // Hardware-style slow pan: if cancel arrives while pan is
+        // mid-await, the select! drops the pan future before record()
+        // runs. With the previous code (is_cancelled check then bare
+        // pan().await), the in-flight pan completed and was recorded.
+        let fake = Arc::new(FakePtz::with_caps(PtzCapabilities {
+            pan: true,
+            ..Default::default()
+        }));
+        fake.set_delay_ms(500);
+        let cfg = PatrolConfig {
+            sweep_steps: 5,
+            dwell_ms: 0,
+            return_home: false,
+        };
+        let h = start_patrol(fake.clone(), cfg);
+        // Spawn picks up, enters sweep, starts the first pan, sleeps.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        h.cancel().await;
+        let n = fake.calls().len();
+        // Cancel raced and won the select! before record() ran.
+        assert_eq!(
+            n, 0,
+            "expected pan future to be dropped before record(), got {} calls",
+            n
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_during_sweep_skips_home_entirely() {
+        // Sweep + slow pans. We cancel mid-sweep (between pans, while
+        // one is parked on its delay) so the patrol never reaches the
+        // home() block at all. PtzCall::Home must not appear in the
+        // recorded sequence.
+        let fake = Arc::new(FakePtz::with_caps(PtzCapabilities {
+            pan: true,
+            tilt: true,
+            home: true,
+            ..Default::default()
+        }));
+        fake.set_delay_ms(500);
+        let cfg = PatrolConfig {
+            sweep_steps: 1,
+            dwell_ms: 0,
+            return_home: true,
+        };
+        let h = start_patrol(fake.clone(), cfg);
+        // Sweep would be 4 pans @ 500ms each = 2000ms; cancel ~1s in
+        // so only 1-3 pans get recorded and the home() branch is
+        // never entered.
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        h.cancel().await;
+        let calls = fake.calls();
+        assert!(
+            !calls.contains(&PtzCall::Home),
+            "home should have been skipped, got: {:?}",
+            calls
         );
     }
 

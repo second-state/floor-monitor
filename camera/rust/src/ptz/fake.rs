@@ -8,8 +8,9 @@
 
 use super::{PanDir, Ptz, PtzCapabilities, PtzError, TiltDir, ZoomDir};
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PtzCall {
@@ -24,6 +25,11 @@ pub struct FakePtz {
     caps: PtzCapabilities,
     calls: Mutex<Vec<PtzCall>>,
     fail_next: AtomicBool,
+    /// Sleep this many milliseconds inside every trait method before
+    /// recording the call. Lets tests simulate slow hardware so racing
+    /// cancellation against an in-flight `.await` (via `tokio::select!`)
+    /// is deterministically testable.
+    delay_ms: AtomicU64,
 }
 
 impl FakePtz {
@@ -32,7 +38,15 @@ impl FakePtz {
             caps,
             calls: Mutex::new(Vec::new()),
             fail_next: AtomicBool::new(false),
+            delay_ms: AtomicU64::new(0),
         }
+    }
+
+    /// Sleep this many milliseconds at the start of every trait method.
+    /// Used to simulate slow hardware so cancellation racing through a
+    /// `tokio::select!` is deterministically observable.
+    pub fn set_delay_ms(&self, ms: u64) {
+        self.delay_ms.store(ms, Ordering::SeqCst);
     }
 
     /// Snapshot the recorded call list. Cheap (clones a small Vec).
@@ -56,6 +70,13 @@ impl FakePtz {
             Ok(())
         }
     }
+
+    async fn maybe_delay(&self) {
+        let ms = self.delay_ms.load(Ordering::SeqCst);
+        if ms > 0 {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+        }
+    }
 }
 
 #[async_trait]
@@ -64,15 +85,19 @@ impl Ptz for FakePtz {
         self.caps
     }
     async fn pan(&self, dir: PanDir) -> Result<(), PtzError> {
+        self.maybe_delay().await;
         self.record(PtzCall::Pan(dir))
     }
     async fn tilt(&self, dir: TiltDir) -> Result<(), PtzError> {
+        self.maybe_delay().await;
         self.record(PtzCall::Tilt(dir))
     }
     async fn zoom(&self, dir: ZoomDir) -> Result<(), PtzError> {
+        self.maybe_delay().await;
         self.record(PtzCall::Zoom(dir))
     }
     async fn home(&self) -> Result<(), PtzError> {
+        self.maybe_delay().await;
         self.record(PtzCall::Home)
     }
 }
