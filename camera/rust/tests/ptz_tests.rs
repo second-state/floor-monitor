@@ -103,11 +103,25 @@ async fn execute_ptz_unknown_direction_returns_bad_direction() {
 }
 
 #[tokio::test]
-async fn execute_ptz_missing_direction_returns_bad_direction_empty() {
+async fn execute_ptz_missing_direction_returns_missing_direction() {
     let f = fake();
     let p: Arc<dyn Ptz> = f.clone();
     let err = ptz::execute_ptz(&p, &json!({})).await.unwrap_err();
-    assert!(matches!(err, PtzError::BadDirection(s) if s.is_empty()));
+    assert!(matches!(err, PtzError::MissingDirection));
+    // The message reaching the server's command_ack is actionable.
+    assert_eq!(err.to_string(), "missing 'direction' parameter");
+}
+
+#[tokio::test]
+async fn execute_ptz_non_string_direction_returns_missing_direction() {
+    // params.direction is not a string (here a number) — same shape as
+    // missing entirely from the client's perspective.
+    let f = fake();
+    let p: Arc<dyn Ptz> = f.clone();
+    let err = ptz::execute_ptz(&p, &json!({"direction": 42}))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PtzError::MissingDirection));
 }
 
 // ---- NoopPtz protocol-level behavior ---------------------------------
@@ -383,6 +397,33 @@ async fn absolute_writes_are_snapped_to_v4l2_step_lattice() {
     h.ptz.tilt(TiltDir::Up).await.unwrap();
     let cmd2 = &h.runner.captured()[1][2];
     assert_eq!(cmd2, "--set-ctrl=tilt_absolute=90");
+}
+
+#[tokio::test]
+async fn absolute_writes_do_not_overflow_with_huge_step() {
+    // Misconfigured pan_step = i32::MAX. Naive guard + sign*step would
+    // overflow i32 (panic in debug, wrap in release). Saturating
+    // arithmetic should clamp the intermediate to i32::MAX, then snap
+    // pulls it back to range.max (which is on-lattice).
+    const NORMAL_RANGE: &str = "
+                   pan_absolute 0x009a0908 (int) : min=-36000 max=36000 step=3600 default=0 value=0
+                  tilt_absolute 0x009a0909 (int) : min=-18000 max=18000 step=1800 default=0 value=0
+";
+    let huge = PtzConfig {
+        pan_step: i32::MAX,
+        tilt_step: i32::MAX,
+        ..PtzConfig::default()
+    };
+    let h = harness(NORMAL_RANGE, huge);
+    // pan_right: should clamp to max=36000 without panic.
+    h.ptz.pan(PanDir::Right).await.unwrap();
+    let cmd = &h.runner.captured()[0][2];
+    assert_eq!(cmd, "--set-ctrl=pan_absolute=36000");
+    // pan_left from 36000: target = 36000 + (-1)*MAX → saturates to MIN
+    // → snap clamps to -36000.
+    h.ptz.pan(PanDir::Left).await.unwrap();
+    let cmd = &h.runner.captured()[1][2];
+    assert_eq!(cmd, "--set-ctrl=pan_absolute=-36000");
 }
 
 #[tokio::test]

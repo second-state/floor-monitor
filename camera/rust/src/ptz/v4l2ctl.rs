@@ -273,12 +273,15 @@ impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
             }
             AxisCtrl::Absolute { current, range } => {
                 let mut guard = current.lock().await;
-                // Snap the target onto the V4L2 control's lattice
-                // (`min + N*step`). Without this, a hardware whose step
-                // disagrees with the configured step would reject every
-                // --set-ctrl write outright. snap() also clamps to
-                // [min, max], so the manual clamp is no longer needed.
-                let next = range.snap(*guard + sign * step);
+                // Use saturating arithmetic so a misconfigured huge step
+                // or an accumulated drift on long-running sessions can't
+                // overflow i32 (which panics in debug, wraps in release).
+                // Saturated values land at i32::MIN / i32::MAX; snap()
+                // then clamps to [range.min, range.max] and aligns onto
+                // the V4L2 lattice (min + N*step).
+                let delta = sign.saturating_mul(step);
+                let target = guard.saturating_add(delta);
+                let next = range.snap(target);
                 let arg = format!("--set-ctrl={}_absolute={}", ctrl_prefix, next);
                 self.runner.run(&["-d", &self.device, &arg]).await?;
                 *guard = next;
