@@ -67,12 +67,17 @@ pub async fn dispatch(
             if let Some(prev) = ctx.patrol_slot.take() {
                 prev.cancel().await;
             }
-            // Patrol requires a ptz that can pan.
-            if !ctx.ptz.capabilities().pan {
-                return (false, "patrol unsupported (no pan)".to_string());
+            // Cameras without a pan motor (NoopPtz, macOS/Windows fallback,
+            // `[ptz] enabled = false`, failed detection) ack patrol as a
+            // no-op rather than failing it. This preserves the pre-PR
+            // behavior where every command path was acked successfully on
+            // hardware-less clients.
+            if ctx.ptz.capabilities().pan {
+                *ctx.patrol_slot = Some(start_patrol(ctx.ptz.clone(), ctx.patrol_cfg.clone()));
+                (true, "patrol_started".to_string())
+            } else {
+                (true, "patrol acknowledged (no pan motor)".to_string())
             }
-            *ctx.patrol_slot = Some(start_patrol(ctx.ptz.clone(), ctx.patrol_cfg.clone()));
-            (true, "patrol_started".to_string())
         }
         other => (false, format!("Unknown action: {}", other)),
     }

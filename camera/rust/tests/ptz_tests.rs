@@ -124,15 +124,18 @@ async fn dispatch_ptz_pan_left_with_noop_acks_success() {
 }
 
 #[tokio::test]
-async fn dispatch_patrol_without_pan_capability_fails() {
-    // NoopPtz reports caps.pan = false → patrol should fail fast.
+async fn dispatch_patrol_without_pan_capability_acks_as_no_op() {
+    // NoopPtz reports caps.pan = false. Patrol should ack success without
+    // spawning a task — matches the documented fallback behavior for
+    // hardware-less clients (macOS, [ptz] enabled = false, failed detection).
     let p: Arc<dyn Ptz> = Arc::new(NoopPtz);
     let mut slot = None;
     let cfg = fast_patrol_cfg();
     let mut c = ctx(p, &mut slot, &cfg);
     let (success, msg) = dispatch(&mut c, "patrol", &json!({})).await;
-    assert!(!success);
-    assert!(msg.contains("unsupported"));
+    assert!(success);
+    assert!(msg.contains("acknowledged"));
+    // No task was spawned — fallback path skips start_patrol entirely.
     assert!(slot.is_none());
 }
 
