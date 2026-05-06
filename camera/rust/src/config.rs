@@ -36,7 +36,13 @@ pub struct CameraConfig {
     pub jpeg_quality: u8,
     /// Capabilities advertised on registration (e.g. "ptz", "patrol").
     /// The server uses these to decide which cameras can receive movement
-    /// commands. Leave empty for fixed cameras with no PTZ hardware.
+    /// commands via `send_command_to_any_camera`. Leave empty for fixed
+    /// cameras with no PTZ hardware.
+    ///
+    /// Setting this overrides only the advertised wire list — it does
+    /// NOT change which `Ptz` implementation is built (detection still
+    /// picks `V4l2CtlPtz` vs `NoopPtz`). To fully suppress real motor
+    /// moves regardless of detection, set `[ptz] enabled = false` instead.
     #[serde(default)]
     pub capabilities: Vec<String>,
 }

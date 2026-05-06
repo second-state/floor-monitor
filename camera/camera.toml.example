@@ -25,13 +25,22 @@ max_dimension = 768
 # JPEG quality (1-100)
 jpeg_quality = 85
 
-# Capabilities this camera supports. The server uses these to decide
-# whether to send movement commands. Common values: "ptz", "patrol".
-# Leave empty (or omit) for fixed cameras (e.g. Mac built-in webcam).
+# Capabilities advertised to the server on register. The server's
+# `send_command_to_any_camera` filter uses these to decide whether to
+# route movement commands here. Common values: "ptz", "patrol". Leave
+# empty (or omit) for fixed cameras (e.g. Mac built-in webcam).
 #
-# When this field is empty, the Rust client auto-detects capabilities by
-# probing `v4l2-ctl --list-ctrls` on Linux. Set it explicitly to override
-# detection (force a capability for testing, or suppress a buggy parse).
+# When this field is empty, the Rust client auto-detects pan/tilt
+# controls via `v4l2-ctl --list-ctrls` on Linux and advertises
+# ["ptz", "patrol"] only when both axes are present.
+#
+# Setting this explicitly OVERRIDES only the advertised wire list. It
+# does NOT change which Ptz implementation is used — that is still
+# chosen by detection. So setting `capabilities = ["ptz"]` on a
+# camera with no real motors will let the server route commands here,
+# but the client will just ack without moving the lens. If you want
+# to fully suppress real motor moves regardless of detection, set
+# `[ptz] enabled = false` below instead.
 # capabilities = ["ptz", "patrol"]
 
 # ----- PTZ controller (Rust client only) -----

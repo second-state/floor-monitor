@@ -103,6 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // PTZ controller. On Linux with detected pan/tilt controls this is
     // V4l2CtlPtz; everywhere else it's NoopPtz (acks but doesn't move).
+    // The Ptz impl is chosen entirely by detection + `[ptz] enabled`;
+    // [camera] capabilities only renames the advertised wire list.
     let ptz: Arc<dyn Ptz> = ptz::build(&config.ptz, &config.camera).await;
     let advertised_caps =
         resolve_advertised_capabilities(&config.camera.capabilities, ptz.capabilities());

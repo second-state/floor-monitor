@@ -146,6 +146,11 @@ pub async fn detect<R: V4l2CtlRunner + ?Sized>(runner: &R, device: &str) -> PtzC
 /// Resolve the list of capability strings to advertise to the server.
 /// If the user-supplied list is non-empty it wins (explicit override);
 /// otherwise we use the auto-detected set.
+///
+/// Note: this only resolves the **wire-level advertised list**. The
+/// `Ptz` implementation in use is still picked by detection + the
+/// `[ptz] enabled` flag — the override never swaps a `NoopPtz` for a
+/// `V4l2CtlPtz` or vice versa.
 pub fn resolve_advertised_capabilities(
     user_supplied: &[String],
     detected: PtzCapabilities,
