@@ -64,8 +64,13 @@ pub async fn dispatch(
         },
         "patrol" => {
             // Cancel any previous patrol so a new request always wins.
+            // Use signal_cancel (no .await) to avoid blocking this
+            // dispatch on the previous task's in-flight pan() — that
+            // could be mid-v4l2-ctl call and stall the WS loop for up
+            // to a 2-second subprocess timeout. The detached task will
+            // exit at its next yield once it sees the cancel token.
             if let Some(prev) = ctx.patrol_slot.take() {
-                prev.cancel().await;
+                prev.signal_cancel();
             }
             // Cameras without a pan motor (NoopPtz, macOS/Windows fallback,
             // `[ptz] enabled = false`, failed detection) ack patrol as a

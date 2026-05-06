@@ -27,9 +27,25 @@ pub struct PatrolHandle {
 impl PatrolHandle {
     /// Signal the patrol to stop and await orderly shutdown. The patrol
     /// finishes any in-flight `pan` call but does not start the next one.
+    /// May block up to one `v4l2-ctl` timeout (~2s) if the previous
+    /// `pan` is mid-subprocess. Use [`PatrolHandle::signal_cancel`] in
+    /// hot paths where blocking the caller is unacceptable.
     pub async fn cancel(self) {
         self.cancel.cancel();
         let _ = self.join.await;
+    }
+
+    /// Signal the patrol to stop without awaiting its join. The spawned
+    /// task continues running on tokio until it reaches its next yield
+    /// point and observes the cancel token, then exits naturally — but
+    /// the caller doesn't have to wait for the in-flight `pan` to
+    /// finish. Used by `commands::dispatch` so the WebSocket loop can
+    /// ack `patrol_started` immediately when a new patrol pre-empts an
+    /// older one.
+    pub fn signal_cancel(self) {
+        self.cancel.cancel();
+        // self.join is dropped here. tokio detaches the task; it runs
+        // to completion in the background.
     }
 
     /// Test-only: wait for the patrol to complete naturally.
@@ -206,6 +222,45 @@ mod tests {
         h.join().await;
         // Only the first (failing) pan was recorded.
         assert_eq!(fake.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn signal_cancel_returns_immediately_and_task_exits_eventually() {
+        // The point of signal_cancel is that the caller DOES NOT wait for
+        // the spawned task to finish. We assert this by measuring how
+        // long signal_cancel takes — under a millisecond — even when the
+        // task is parked on a long dwell sleep.
+        let fake = Arc::new(FakePtz::with_caps(PtzCapabilities {
+            pan: true,
+            ..Default::default()
+        }));
+        let cfg = PatrolConfig {
+            sweep_steps: 5,
+            dwell_ms: 100_000, // forever
+            return_home: false,
+        };
+        let h = start_patrol(fake.clone(), cfg);
+        // Let the first pan happen and the task park on the dwell sleep.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let before = std::time::Instant::now();
+        h.signal_cancel();
+        // Should return effectively instantly — no .await on the join.
+        assert!(
+            before.elapsed() < Duration::from_millis(20),
+            "signal_cancel should not block; took {:?}",
+            before.elapsed()
+        );
+        // Yield once so the detached task can wake on the cancel future
+        // and exit. This is enough because the dwell select races
+        // sleep(100s) against cancel.cancelled() — cancel wins instantly.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // No further pans should have been issued past the first.
+        let n = fake.calls().len();
+        assert!(
+            (1..=2).contains(&n),
+            "expected 1 or 2 pans before cancel, got {}",
+            n
+        );
     }
 
     #[tokio::test]
