@@ -491,6 +491,32 @@ async fn capabilities_match_parsed_controls_for_relative_only() {
 }
 
 #[tokio::test]
+async fn capabilities_home_false_when_driver_picks_relative_over_absolute() {
+    // Both pan_relative AND pan_absolute (and same for tilt) are present
+    // in --list-ctrls. AxisCtrl::from_parsed prefers Relative, so
+    // home() will return Unsupported even though the parser sees both
+    // *_absolute names. capabilities().home must reflect the runtime
+    // contract — false here, not true.
+    const BOTH_MODES: &str = "
+                   pan_relative 0x009a0904 (int) : min=-1 max=1 step=1 default=0 value=0
+                  tilt_relative 0x009a0905 (int) : min=-1 max=1 step=1 default=0 value=0
+                   pan_absolute 0x009a0908 (int) : min=-36000 max=36000 step=3600 default=0 value=0
+                  tilt_absolute 0x009a0909 (int) : min=-18000 max=18000 step=1800 default=0 value=0
+";
+    let h = harness(BOTH_MODES, cfg());
+    let c = h.ptz.capabilities();
+    assert!(c.pan);
+    assert!(c.tilt);
+    assert!(
+        !c.home,
+        "home should be false because driver picked Relative mode"
+    );
+    // Sanity: home() actually returns Unsupported.
+    let err = h.ptz.home().await.unwrap_err();
+    assert!(matches!(err, PtzError::Unsupported("home")));
+}
+
+#[tokio::test]
 async fn make_ptz_helper_smoke() {
     // Sanity that the simpler constructor compiles and yields expected caps.
     let p = make_ptz(RELATIVE_CTRLS, cfg());

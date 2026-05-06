@@ -191,16 +191,27 @@ pub struct V4l2CtlPtz<R: V4l2CtlRunner> {
 
 impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
     pub fn new(runner: R, device: String, parsed: &ParsedControls, cfg: &PtzConfig) -> Self {
+        let pan = AxisCtrl::from_parsed("pan", parsed);
+        let tilt = AxisCtrl::from_parsed("tilt", parsed);
+        // Override caps.home to match what the driver can actually do:
+        // the parser sees "both pan_absolute and tilt_absolute exist" and
+        // would set home=true, but if AxisCtrl picked Relative for either
+        // axis (because pan_relative was also present) home() will return
+        // Unsupported at runtime. Reporting the runtime contract avoids
+        // capability/implementation drift visible to consumers.
+        let mut caps = PtzCapabilities::from_controls(parsed);
+        caps.home =
+            matches!(pan, AxisCtrl::Absolute { .. }) && matches!(tilt, AxisCtrl::Absolute { .. });
         Self {
             runner,
             device,
-            pan: AxisCtrl::from_parsed("pan", parsed),
-            tilt: AxisCtrl::from_parsed("tilt", parsed),
+            pan,
+            tilt,
             pan_step: cfg.pan_step,
             tilt_step: cfg.tilt_step,
             invert_pan: cfg.invert_pan,
             invert_tilt: cfg.invert_tilt,
-            caps: PtzCapabilities::from_controls(parsed),
+            caps,
         }
     }
 
