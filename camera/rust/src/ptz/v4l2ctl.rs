@@ -47,7 +47,15 @@ impl V4l2CtlRunner for RealRunner {
     async fn run(&self, args: &[&str]) -> Result<String, PtzError> {
         use tokio::process::Command;
         use tokio::time::timeout;
-        let fut = Command::new("v4l2-ctl").args(args).output();
+        // kill_on_drop(true) wires SIGKILL to the child's Drop. When our
+        // 2-second timeout fires the spawned future is dropped along with
+        // its Child, and the v4l2-ctl process is reaped — without this
+        // flag, a wedged USB device would leak one orphan v4l2-ctl per
+        // timed-out PTZ command on long-running clients.
+        let fut = Command::new("v4l2-ctl")
+            .args(args)
+            .kill_on_drop(true)
+            .output();
         let output = timeout(std::time::Duration::from_secs(2), fut)
             .await
             .map_err(|_| PtzError::Timeout)?
