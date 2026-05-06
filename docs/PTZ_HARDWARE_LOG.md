@@ -24,11 +24,13 @@ For each camera, on a Linux host with the camera plugged in:
    ls /dev/video*
    ```
    If the camera is not at `/dev/video0`, set `[ptz] device = "/dev/videoN"`
-   in `camera.toml` (or pass via `[camera] device_index = N`).
+   in `camera.toml` (or pass via `[camera] device_index = N`). Use the
+   resulting path everywhere the rest of this procedure says
+   `/dev/videoN`.
 
 2. **Inspect controls:**
    ```bash
-   v4l2-ctl --device=/dev/video0 --list-ctrls
+   v4l2-ctl --device=/dev/videoN --list-ctrls
    ```
    Look for `pan_relative`, `pan_absolute`, `tilt_relative`, `tilt_absolute`,
    `zoom_absolute`. Note which axes are present.
@@ -39,8 +41,15 @@ For each camera, on a Linux host with the camera plugged in:
    ```bash
    cd camera/rust && cargo run --release -- ../camera.toml
    ```
-   In the startup log, look for `PTZ caps advertised: [...]`. It should
-   match what `v4l2-ctl --list-ctrls` showed.
+   In the startup log, look for `PTZ caps advertised: [...]`. The advertised
+   list is driven by **pan and tilt** detection only — both `ptz` and
+   `patrol` require both axes. So:
+   - pan + tilt detected → `["ptz", "patrol"]`
+   - pan-only, tilt-only, zoom-only, or no PTZ controls → `[]`
+
+   This means a zoom-only camera like the Logitech C920 advertises `[]`
+   even though `--list-ctrls` shows `zoom_absolute` (the server has no
+   zoom UI/intent today, so any zoom routing would be a footgun).
 
 5. **Click each direction in the dashboard** at `http://localhost:3456`:
    - `▲` (tilt_up): camera should tilt up.
