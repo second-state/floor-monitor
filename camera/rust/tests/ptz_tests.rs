@@ -4,7 +4,7 @@
 //! without standing up a real WebSocket.
 
 use floor_monitor_camera::commands::{build_ack, dispatch, CommandCtx};
-use floor_monitor_camera::config::{PatrolConfig, PtzConfig};
+use floor_monitor_camera::config::{CameraConfig, PatrolConfig, PtzConfig};
 use floor_monitor_camera::ptz::{
     self,
     detect::parse_list_ctrls,
@@ -521,4 +521,88 @@ async fn make_ptz_helper_smoke() {
     // Sanity that the simpler constructor compiles and yields expected caps.
     let p = make_ptz(RELATIVE_CTRLS, cfg());
     assert!(p.capabilities().pan);
+}
+
+// ---- build_with_runner factory branches ----------------------------
+
+fn camera_cfg() -> CameraConfig {
+    // Minimal config; we only need device_index to exist for the
+    // device_path helper inside build_with_runner.
+    toml::from_str::<CameraConfig>(
+        r#"
+id = "test"
+name = "Test"
+"#,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn build_when_disabled_returns_noop() {
+    let runner = FakeV4l2CtlRunner::with_response(RELATIVE_CTRLS);
+    let cfg = PtzConfig {
+        enabled: false,
+        ..PtzConfig::default()
+    };
+    let ptz = ptz::build_with_runner(&cfg, &camera_cfg(), runner).await;
+    // NoopPtz reports all-false capabilities.
+    assert!(!ptz.capabilities().pan);
+    assert!(!ptz.capabilities().tilt);
+}
+
+#[tokio::test]
+async fn build_when_runner_errors_returns_noop() {
+    let runner = FakeV4l2CtlRunner::with_error(PtzError::V4l2("not found".into()));
+    let ptz = ptz::build_with_runner(&PtzConfig::default(), &camera_cfg(), runner).await;
+    assert!(!ptz.capabilities().pan);
+    assert!(!ptz.capabilities().tilt);
+}
+
+#[tokio::test]
+async fn build_when_runner_times_out_returns_noop() {
+    let runner = FakeV4l2CtlRunner::with_error(PtzError::Timeout);
+    let ptz = ptz::build_with_runner(&PtzConfig::default(), &camera_cfg(), runner).await;
+    assert!(!ptz.capabilities().pan);
+}
+
+#[tokio::test]
+async fn build_when_no_pan_or_tilt_detected_returns_noop() {
+    // brightness/contrast only — no PTZ controls.
+    let runner = FakeV4l2CtlRunner::with_response(
+        "
+                       brightness 0x00980900 (int) : min=0 max=255 step=1 default=128 value=128
+",
+    );
+    let ptz = ptz::build_with_runner(&PtzConfig::default(), &camera_cfg(), runner).await;
+    assert!(!ptz.capabilities().pan);
+    assert!(!ptz.capabilities().tilt);
+}
+
+#[tokio::test]
+async fn build_when_pan_and_tilt_detected_returns_v4l2_ctl_ptz() {
+    let runner = FakeV4l2CtlRunner::with_response(RELATIVE_CTRLS);
+    let ptz = ptz::build_with_runner(&PtzConfig::default(), &camera_cfg(), runner).await;
+    // Capabilities forwarded from V4l2CtlPtz.
+    assert!(ptz.capabilities().pan);
+    assert!(ptz.capabilities().tilt);
+    // Behavior check: a pan call should reach the underlying runner.
+    // (We can't easily inspect the runner here because build_with_runner
+    // takes ownership, but capabilities being non-default is sufficient
+    // proof V4l2CtlPtz was selected — NoopPtz reports all-false.)
+}
+
+#[tokio::test]
+async fn build_with_only_pan_detected_still_returns_v4l2_ctl_ptz() {
+    // pan_relative without tilt: build() admits this (caps.pan || caps.tilt),
+    // but advertised() returns [] so the server won't route to it via
+    // send_command_to_any_camera. Direct send_camera_command still
+    // exercises the controller, where pan succeeds and tilt fails honestly.
+    let runner = FakeV4l2CtlRunner::with_response(
+        "
+                   pan_relative 0x009a0904 (int) : min=-1 max=1 step=1 default=0 value=0
+",
+    );
+    let ptz = ptz::build_with_runner(&PtzConfig::default(), &camera_cfg(), runner).await;
+    assert!(ptz.capabilities().pan);
+    assert!(!ptz.capabilities().tilt);
 }

@@ -107,34 +107,51 @@ pub async fn build(
     cfg: &crate::config::PtzConfig,
     camera_cfg: &crate::config::CameraConfig,
 ) -> Arc<dyn Ptz> {
+    #[cfg(target_os = "linux")]
+    {
+        return build_with_runner(cfg, camera_cfg, v4l2ctl::RealRunner).await;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (cfg, camera_cfg);
+        Arc::new(noop::NoopPtz)
+    }
+}
+
+/// Inner of [`build`] with the runner injected, so tests can drive the
+/// branches with a [`v4l2ctl::FakeV4l2CtlRunner`] and assert which
+/// implementation comes back.
+pub async fn build_with_runner<R>(
+    cfg: &crate::config::PtzConfig,
+    camera_cfg: &crate::config::CameraConfig,
+    runner: R,
+) -> Arc<dyn Ptz>
+where
+    R: v4l2ctl::V4l2CtlRunner + 'static,
+{
     if !cfg.enabled {
         info!("PTZ disabled in config; using NoopPtz");
         return Arc::new(noop::NoopPtz);
     }
-    #[cfg(target_os = "linux")]
-    {
-        let device = crate::config::device_path(camera_cfg, cfg);
-        let runner = v4l2ctl::RealRunner;
-        let args = ["-d", device.as_str(), "--list-ctrls"];
-        match v4l2ctl::V4l2CtlRunner::run(&runner, &args).await {
-            Ok(out) => {
-                let parsed = detect::parse_list_ctrls(&out);
-                let caps = PtzCapabilities::from_controls(&parsed);
-                if caps.pan || caps.tilt {
-                    info!("PTZ: detected on {} (caps {:?})", device, caps);
-                    return Arc::new(v4l2ctl::V4l2CtlPtz::new(runner, device, &parsed, cfg));
-                }
-                info!("PTZ: {} has no pan/tilt controls; using NoopPtz", device);
+    let device = crate::config::device_path(camera_cfg, cfg);
+    let args = ["-d", device.as_str(), "--list-ctrls"];
+    match v4l2ctl::V4l2CtlRunner::run(&runner, &args).await {
+        Ok(out) => {
+            let parsed = detect::parse_list_ctrls(&out);
+            let caps = PtzCapabilities::from_controls(&parsed);
+            if caps.pan || caps.tilt {
+                info!("PTZ: detected on {} (caps {:?})", device, caps);
+                return Arc::new(v4l2ctl::V4l2CtlPtz::new(runner, device, &parsed, cfg));
             }
-            Err(e) => {
-                info!(
-                    "PTZ: v4l2-ctl probe of {} failed ({}); using NoopPtz",
-                    device, e
-                );
-            }
+            info!("PTZ: {} has no pan/tilt controls; using NoopPtz", device);
+        }
+        Err(e) => {
+            info!(
+                "PTZ: v4l2-ctl probe of {} failed ({}); using NoopPtz",
+                device, e
+            );
         }
     }
-    let _ = camera_cfg;
     Arc::new(noop::NoopPtz)
 }
 
