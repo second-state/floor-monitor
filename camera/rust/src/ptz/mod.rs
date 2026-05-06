@@ -75,6 +75,8 @@ pub enum PtzError {
     Disabled,
     #[error("unsupported on this hardware: {0}")]
     Unsupported(&'static str),
+    #[error("missing 'direction' parameter")]
+    MissingDirection,
     #[error("unknown direction '{0}'")]
     BadDirection(String),
     #[error("v4l2-ctl failed: {0}")]
@@ -169,17 +171,18 @@ pub async fn execute_ptz(
     ptz: &Arc<dyn Ptz>,
     params: &serde_json::Value,
 ) -> Result<String, PtzError> {
-    let direction = params
-        .get("direction")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let direction = params.get("direction").and_then(|v| v.as_str());
     match direction {
-        "pan_left" => ptz.pan(PanDir::Left).await.map(|_| "pan_left ok".into()),
-        "pan_right" => ptz.pan(PanDir::Right).await.map(|_| "pan_right ok".into()),
-        "tilt_up" => ptz.tilt(TiltDir::Up).await.map(|_| "tilt_up ok".into()),
-        "tilt_down" => ptz.tilt(TiltDir::Down).await.map(|_| "tilt_down ok".into()),
-        "home" => ptz.home().await.map(|_| "home ok".into()),
-        other => Err(PtzError::BadDirection(other.to_string())),
+        Some("pan_left") => ptz.pan(PanDir::Left).await.map(|_| "pan_left ok".into()),
+        Some("pan_right") => ptz.pan(PanDir::Right).await.map(|_| "pan_right ok".into()),
+        Some("tilt_up") => ptz.tilt(TiltDir::Up).await.map(|_| "tilt_up ok".into()),
+        Some("tilt_down") => ptz.tilt(TiltDir::Down).await.map(|_| "tilt_down ok".into()),
+        Some("home") => ptz.home().await.map(|_| "home ok".into()),
+        Some(other) => Err(PtzError::BadDirection(other.to_string())),
+        // Field absent or non-string. Distinct error so the ack message
+        // is actionable ("missing 'direction' parameter") instead of
+        // the confusing "unknown direction ''".
+        None => Err(PtzError::MissingDirection),
     }
 }
 
