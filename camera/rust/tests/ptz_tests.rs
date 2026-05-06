@@ -243,14 +243,15 @@ async fn dispatch_ptz_when_trait_fails_acks_failure_with_error_text() {
 #[test]
 fn build_ack_has_required_fields() {
     let ack = build_ack("cam-1", "ptz", true, "pan_left ok");
+    // Pin the protocol contract (the fields the server's CommandAck
+    // deserializer reads), not the implementation's exact JSON shape.
+    // The deserializer ignores unknown fields, so future forwards-
+    // compatible additions to the ack must not break this test.
     assert_eq!(ack["type"], "command_ack");
     assert_eq!(ack["camera_id"], "cam-1");
     assert_eq!(ack["action"], "ptz");
     assert_eq!(ack["success"], true);
     assert_eq!(ack["message"], "pan_left ok");
-    // Exactly five fields — no surprise additions.
-    let obj = ack.as_object().unwrap();
-    assert_eq!(obj.len(), 5);
 }
 
 #[test]
