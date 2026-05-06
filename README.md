@@ -37,9 +37,13 @@ OpenAI-compatible APIs — the server itself loads no models.
   patrol, history summaries.
 - **Camera control** — Server sends PTZ and patrol commands to capable cameras
   via WebSocket. Cameras report capabilities on registration; fixed cameras
-  (e.g. Mac webcam) are never sent movement commands.
-- **Dual camera clients** — Python (USB + RTSP) and Rust (USB only), sharing
-  the same `camera.toml` config format.
+  (e.g. Mac webcam) are never sent movement commands. The Rust client drives
+  real UVC PTZ hardware on Linux when `v4l-utils` is installed (auto-detected
+  on startup); macOS and Windows still acknowledge but do not move motors.
+  See [`docs/PTZ_HARDWARE_LOG.md`](docs/PTZ_HARDWARE_LOG.md) for the
+  verified-hardware matrix.
+- **Dual camera clients** — Python (USB + RTSP) and Rust (USB only, with UVC
+  PTZ on Linux), sharing the same `camera.toml` config format.
 - **Multi-camera** — Multiple camera clients can connect simultaneously.
 
 ## Quick Start

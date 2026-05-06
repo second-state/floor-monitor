@@ -74,6 +74,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -585,14 +596,18 @@ dependencies = [
 name = "floor-monitor-camera"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
  "futures-util",
  "image",
  "nokhwa",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -2161,6 +2176,19 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tungstenite",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

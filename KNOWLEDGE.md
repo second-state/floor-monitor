@@ -167,6 +167,19 @@ The `capabilities` field in `camera.toml` is an optional list of strings (e.g. `
 
 After receiving an inference result, camera clients poll for pending command messages with a short timeout. Commands have `action` ("ptz", "patrol") and `params` (e.g. `{"direction": "pan_left"}`). The client sends a `command_ack` response. The Python client logs commands but does not implement actual motor control — that depends on the camera hardware.
 
+### UVC PTZ (Rust client, Linux only)
+
+The Rust camera client drives real UVC PTZ webcams by shelling out to `v4l2-ctl --set-ctrl=...`. Several non-obvious things to know:
+
+- **Vendor quirks dominate.** The standard V4L2 controls (`pan_absolute`, `tilt_absolute`, `pan_relative`, `tilt_relative`, `zoom_absolute`) are *not* uniformly implemented. The Logitech BCC950 only exposes the relative pair; some PTZ Pro 2 firmware needs `uvcdynctrl` or [`cameractrls`](https://github.com/soyersoyer/cameractrls) Logitech vendor codes that pure V4L2 can't see. Do not assume "has V4L2 device → has pan_absolute".
+- **Why we shell out instead of using the [`v4l`](https://crates.io/crates/v4l) crate.** Subprocess overhead (~5–15 ms per call) is irrelevant for PTZ commands fired at human cadence, and the `v4l` crate's bindings have churned across versions while requiring `libclang-dev` at build time. Shell-out keeps us at zero unsafe, zero new system deps for the library half (CI builds without `v4l-utils`), and lets users sidestep our parse with their own tools when needed. The `V4l2CtlRunner` trait makes this swappable later.
+- **Device path mapping.** `nokhwa::utils::CameraIndex::Index(N)` maps to `/dev/videoN` via the `nokhwa-bindings-linux` V4L2 backend. We replicate that mapping ourselves for `v4l2-ctl` (the binary takes a device path, not an index). Override via `[ptz] device = "..."` in `camera.toml`.
+- **`nokhwa::Camera::new` and `v4l2-ctl --list-ctrls` don't conflict.** Querying controls is independent of streaming on UVC, so probing capabilities after `open_stream()` is safe.
+- **Pan/tilt sign convention is camera-specific.** Reference convention in this codebase: `pan_left = negative pan delta`, `tilt_up = positive tilt delta`. Cameras whose firmware flips this are accommodated via `[ptz] invert_pan = true` / `invert_tilt = true` — no recompile needed.
+- **Absolute mode tracks position in-process.** For cameras without `pan_relative`, we send `pan_absolute=<current ± step>` and clamp to detected min/max. The tracked position lives in a `tokio::sync::Mutex<i32>` per axis (`AsyncMutex`); the lock is held across the `v4l2-ctl` subprocess await so the (read-prev, write-cmd, update-tracking) triple is atomic from the trait's surface — patrol-task pans and WS-loop pans serialize cleanly instead of racing on a separate-load/separate-store path. The initial position is seeded from the `value=N` field in `--list-ctrls` so the first command after startup moves one step from where the lens actually is, not from a synthetic zero. If another tool drives the camera concurrently while we run, our tracking still diverges — `home()` writes `0,0` directly (acquiring both axis locks first) to recover.
+- **macOS / Windows stay on `NoopPtz`.** `v4l2-ctl` doesn't exist there. The `RealRunner` impl is `#[cfg(target_os = "linux")]`; the `build()` factory always returns `NoopPtz` outside Linux.
+- **Patrol runs on a separate `tokio::spawn`** with a `tokio_util::sync::CancellationToken`. A new patrol cancels the old one. WebSocket disconnect cancels any in-flight patrol *before* reconnecting, so a dropped connection never leaves an orphan patrol moving the camera.
+
 ### Reconnection
 
 Both clients implement auto-reconnect with a 5-second backoff. On reconnect, the camera re-registers with its capabilities.
@@ -191,8 +204,12 @@ Tests may run from the `server/` directory or the repo root. The template loader
 
 ### ARM Linux Runners
 
-CI uses `ubuntu-24.04-arm` runners. The server build and all tests run on ARM. The Rust camera client (`nokhwa` crate) may require system libraries on Linux that aren't available in CI, so CI only builds/tests the server.
+CI uses `ubuntu-24.04-arm` runners. The server build and all tests run on ARM. The Rust camera client's `nokhwa` capture stack needs Linux V4L2 system libraries that aren't installed in CI, so the camera-rust CI jobs run with `--no-default-features` to skip `nokhwa` and only build/test the protocol/PTZ library half. The lib/bin split in `camera/rust/Cargo.toml` (`[features] camera = ["nokhwa", "image", "base64"]`) is what makes this possible.
+
+### Coverage Tooling
+
+`cargo-llvm-cov` is preferred over `cargo-tarpaulin` for camera/rust coverage. Tarpaulin officially supports x86_64 only and is unreliable on aarch64 / macOS; `cargo-llvm-cov` uses `llvm-tools-preview` (shipped with rustup) and runs identically across Linux/macOS/x86_64/aarch64. Installed in CI via `taiki-e/install-action@v2`. The 80%-line gate excludes `main.rs` (nokhwa hardware glue) and any path matching `nokhwa` or `capture` so hardware-coupled code doesn't drag the percentage down.
 
 ### Rust Cache
 
-CI uses `Swatinem/rust-cache@v2` with `workspaces: server` to cache only the server's target directory.
+CI uses `Swatinem/rust-cache@v2` with `workspaces: server` to cache the server's target dir, plus a separate `workspaces: camera/rust` invocation for the camera-rust jobs.

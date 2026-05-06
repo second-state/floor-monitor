@@ -1,155 +1,31 @@
-//! Floor Monitor — Camera Client (Rust)
+//! Floor Monitor — Camera Client (Rust) binary.
 //!
-//! Captures frames from a local webcam and streams them to the floor-monitor
-//! server via WebSocket. Reads the same `camera.toml` config as the Python client.
+//! Captures frames from a local webcam via `nokhwa` and streams them to the
+//! floor-monitor server via WebSocket. Reads the same `camera.toml` config
+//! as the Python client.
+//!
+//! All protocol-side code (config parsing, WebSocket command handling) lives
+//! in the library half (`floor_monitor_camera::*`). Only the webcam capture
+//! loop stays here.
 //!
 //! Note: RTSP support requires additional FFmpeg bindings (not included).
-//! For RTSP cameras, use the Python client or add opencv/ffmpeg crate support.
+//! For RTSP cameras, use the Python client.
 
 use base64::Engine;
-use futures_util::stream::{SplitSink, SplitStream};
+use floor_monitor_camera::commands::{drain_pending_commands, handle_command, CommandCtx};
+use floor_monitor_camera::config::{load_config, Config};
+use floor_monitor_camera::ptz::{
+    self, detect::resolve_advertised_capabilities, patrol::PatrolHandle, Ptz,
+};
 use futures_util::{SinkExt, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
-use serde::Deserialize;
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
-use tokio_tungstenite::{
-    connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
-};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{error, info, warn};
-
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsWrite = SplitSink<WsStream, Message>;
-type WsRead = SplitStream<WsStream>;
-
-#[derive(Debug, Deserialize)]
-struct Config {
-    server: ServerConfig,
-    camera: CameraConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct ServerConfig {
-    ws_url: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CameraConfig {
-    id: String,
-    name: String,
-    #[serde(default)]
-    source_type: String,
-    #[serde(default)]
-    device_index: u32,
-    #[serde(default = "default_interval")]
-    interval: f64,
-    #[serde(default = "default_max_dim")]
-    max_dimension: u32,
-    #[serde(default = "default_quality")]
-    jpeg_quality: u8,
-    /// Capabilities advertised on registration (e.g. "ptz", "patrol").
-    /// The server uses these to decide which cameras can receive movement
-    /// commands. Leave empty for fixed cameras with no PTZ hardware.
-    #[serde(default)]
-    capabilities: Vec<String>,
-}
-
-fn default_interval() -> f64 {
-    2.0
-}
-fn default_max_dim() -> u32 {
-    768
-}
-fn default_quality() -> u8 {
-    85
-}
-
-fn load_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(path)?;
-    let config: Config = toml::from_str(&content)?;
-    Ok(config)
-}
-
-/// Handle a `command` message from the server: log it and ack it.
-/// Mirrors the Python client — we don't drive real motor hardware here,
-/// so PTZ/patrol commands are acknowledged but not acted upon.
-async fn handle_command(write: &mut WsWrite, camera_id: &str, data: &serde_json::Value) {
-    let action = data.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    let params = data
-        .get("params")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    info!("Received command: action={} params={}", action, params);
-
-    let (success, message) = match action {
-        "ptz" => {
-            let direction = params
-                .get("direction")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            info!(
-                "PTZ command: {} (no PTZ hardware on this client)",
-                direction
-            );
-            (
-                true,
-                format!("PTZ {} acknowledged (no PTZ hardware)", direction),
-            )
-        }
-        "patrol" => {
-            info!("Patrol command (no PTZ hardware on this client)");
-            (true, "Patrol acknowledged (no PTZ hardware)".to_string())
-        }
-        other => {
-            warn!("Unknown command action: {}", other);
-            (false, format!("Unknown action: {}", other))
-        }
-    };
-
-    let ack = serde_json::json!({
-        "type": "command_ack",
-        "camera_id": camera_id,
-        "action": action,
-        "success": success,
-        "message": message,
-    });
-    if let Err(e) = write.send(Message::Text(ack.to_string().into())).await {
-        warn!("Failed to send command_ack: {}", e);
-    }
-}
-
-/// Drain any pending command messages without blocking the frame loop.
-/// Called after a result arrives to handle commands that the server
-/// queued between cycles. Mirrors the Python client's 10ms recv loop.
-async fn drain_pending_commands(read: &mut WsRead, write: &mut WsWrite, camera_id: &str) -> bool {
-    loop {
-        match tokio::time::timeout(Duration::from_millis(10), read.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if data.get("type").and_then(|t| t.as_str()) == Some("command") {
-                        handle_command(write, camera_id, &data).await;
-                    }
-                }
-            }
-            Ok(Some(Ok(_))) => {}
-            Ok(Some(Err(e))) => {
-                warn!("WebSocket error during drain: {}", e);
-                return false;
-            }
-            Ok(None) => {
-                info!("Server closed connection during drain");
-                return false;
-            }
-            Err(_) => {
-                // Timeout: no more pending messages.
-                return true;
-            }
-        }
-    }
-}
 
 /// Capture a frame from the local camera using nokhwa, encode as JPEG.
 fn capture_frame_jpeg(
@@ -202,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let config = load_config(Path::new(&config_path))?;
+    let config: Config = load_config(Path::new(&config_path))?;
     info!("Camera: {} ({})", config.camera.name, config.camera.id);
 
     if config.camera.source_type == "rtsp" {
@@ -225,6 +101,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let interval = Duration::from_secs_f64(config.camera.interval);
 
+    // PTZ controller. On Linux with detected pan/tilt controls this is
+    // V4l2CtlPtz; everywhere else it's NoopPtz (acks but doesn't move).
+    // The Ptz impl is chosen entirely by detection + `[ptz] enabled`;
+    // [camera] capabilities only renames the advertised wire list.
+    let ptz: Arc<dyn Ptz> = ptz::build(&config.ptz, &config.camera).await;
+    let advertised_caps =
+        resolve_advertised_capabilities(&config.camera.capabilities, ptz.capabilities());
+    info!("PTZ caps advertised: {:?}", advertised_caps);
+
+    // Patrol task slot. Lives across reconnects so we can cancel any
+    // in-flight patrol when the WebSocket drops.
+    let mut patrol_slot: Option<PatrolHandle> = None;
+
     // Connection loop with auto-reconnect
     loop {
         info!("Connecting to {} ...", config.server.ws_url);
@@ -238,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "type": "register",
                     "camera_id": config.camera.id,
                     "name": config.camera.name,
-                    "capabilities": config.camera.capabilities,
+                    "capabilities": advertised_caps,
                 });
                 if let Err(e) = write.send(Message::Text(register.to_string().into())).await {
                     warn!("Failed to send register: {}", e);
@@ -311,9 +200,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 break;
                                             }
                                             Some("command") => {
+                                                let mut ctx = CommandCtx {
+                                                    ptz: ptz.clone(),
+                                                    patrol_slot: &mut patrol_slot,
+                                                    patrol_cfg: &config.ptz.patrol,
+                                                };
                                                 handle_command(
                                                     &mut write,
                                                     &config.camera.id,
+                                                    &mut ctx,
                                                     &data,
                                                 )
                                                 .await;
@@ -343,8 +238,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // Drain any commands queued behind the result.
-                            if !drain_pending_commands(&mut read, &mut write, &config.camera.id)
-                                .await
+                            let mut ctx = CommandCtx {
+                                ptz: ptz.clone(),
+                                patrol_slot: &mut patrol_slot,
+                                patrol_cfg: &config.ptz.patrol,
+                            };
+                            if !drain_pending_commands(
+                                &mut read,
+                                &mut write,
+                                &config.camera.id,
+                                &mut ctx,
+                            )
+                            .await
                             {
                                 break;
                             }
@@ -365,6 +270,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 warn!("Connection failed: {} — retrying in 5s", e);
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
+        }
+
+        // Cancel any in-flight patrol before reconnect — the dashboard
+        // sees us as offline, so an orphan patrol moving the camera
+        // silently would be surprising.
+        if let Some(p) = patrol_slot.take() {
+            info!("Cancelling in-flight patrol due to disconnect");
+            p.cancel().await;
         }
     }
 }
