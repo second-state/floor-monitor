@@ -142,8 +142,19 @@ where
             let parsed = detect::parse_list_ctrls(&out);
             let caps = PtzCapabilities::from_controls(&parsed);
             if caps.pan || caps.tilt {
-                info!("PTZ: detected on {} (caps {:?})", device, caps);
-                return Arc::new(v4l2ctl::V4l2CtlPtz::new(runner, device, &parsed, cfg));
+                // Construct the controller first, then log its
+                // *post-construction* capabilities. V4l2CtlPtz::new
+                // mutates caps (forces zoom=false, recomputes home
+                // based on Relative-vs-Absolute mode selection), so
+                // logging the raw parser inference here would disagree
+                // with what `ptz.capabilities()` returns later.
+                let controller = v4l2ctl::V4l2CtlPtz::new(runner, device.clone(), &parsed, cfg);
+                info!(
+                    "PTZ: detected on {} (caps {:?})",
+                    device,
+                    controller.capabilities()
+                );
+                return Arc::new(controller);
             }
             info!("PTZ: {} has no pan/tilt controls; using NoopPtz", device);
         }
