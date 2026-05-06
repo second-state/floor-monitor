@@ -361,6 +361,45 @@ async fn absolute_pan_left_writes_negative_step() {
 }
 
 #[tokio::test]
+async fn absolute_writes_are_snapped_to_v4l2_step_lattice() {
+    // Hardware reports step=12 (e.g. a degree-based pan with 12-unit
+    // increments). Configured pan_step = 3600 (the BCC950 default) is
+    // wildly wrong here — the v4l2 driver would reject any write that
+    // isn't on the min + N*12 lattice. After snap, the actual --set-ctrl
+    // value lands on a legal lattice point.
+    const FINE_GRAIN: &str = "
+                   pan_absolute 0x009a0908 (int) : min=-180 max=180 step=12 default=0 value=0
+                  tilt_absolute 0x009a0909 (int) : min=-90 max=90 step=10 default=0 value=0
+";
+    let h = harness(FINE_GRAIN, cfg());
+    h.ptz.pan(PanDir::Right).await.unwrap();
+    let cmd = &h.runner.captured()[0][2];
+    // 0 + 3600 clamped to 180, then snapped to nearest min+N*12: 180 is
+    // -180 + 30*12 = 180, exactly on lattice.
+    assert_eq!(cmd, "--set-ctrl=pan_absolute=180");
+
+    // Tilt: 0 + 1800 clamped to 90, snap to nearest min+N*10: -90 + 18*10 = 90.
+    h.ptz.tilt(TiltDir::Up).await.unwrap();
+    let cmd2 = &h.runner.captured()[1][2];
+    assert_eq!(cmd2, "--set-ctrl=tilt_absolute=90");
+}
+
+#[tokio::test]
+async fn absolute_writes_snap_when_seed_is_off_lattice() {
+    // Camera left at value=15 but step=10, so 15 is off-lattice. After
+    // a single pan_left (step=3600 cfg), target = 15 - 3600 = -3585,
+    // clamped to min=-100, snapped to -100 (which is on-lattice).
+    const SEEDED_OFF_LATTICE: &str = "
+                   pan_absolute 0x009a0908 (int) : min=-100 max=100 step=10 default=0 value=15
+                  tilt_absolute 0x009a0909 (int) : min=-100 max=100 step=10 default=0 value=0
+";
+    let h = harness(SEEDED_OFF_LATTICE, cfg());
+    h.ptz.pan(PanDir::Left).await.unwrap();
+    let cmd = &h.runner.captured()[0][2];
+    assert_eq!(cmd, "--set-ctrl=pan_absolute=-100");
+}
+
+#[tokio::test]
 async fn absolute_initial_position_seeded_from_v4l2_value() {
     // Camera left at pan_absolute=14400 from a previous session. First
     // pan_left should write 14400 - 3600 = 10800, NOT -3600 (which would

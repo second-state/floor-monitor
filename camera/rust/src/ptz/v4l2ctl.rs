@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex as AsyncMutex;
+use tracing::warn;
 
 #[async_trait]
 pub trait V4l2CtlRunner: Send + Sync {
@@ -197,10 +198,30 @@ pub struct V4l2CtlPtz<R: V4l2CtlRunner> {
     caps: PtzCapabilities,
 }
 
+/// Warn (once at startup) when a configured pan/tilt step is not a
+/// multiple of the V4L2 control's declared `step`. Writes to absolute
+/// controls must land on the `min + N*step` lattice — `drive_axis`
+/// snaps the target to the lattice anyway, but a misaligned config
+/// would silently produce smaller-than-intended motion, which is the
+/// kind of confusing behavior worth flagging in logs.
+fn warn_if_step_misaligned(axis: &str, axis_ctrl: &AxisCtrl, configured_step: i32) {
+    if let AxisCtrl::Absolute { range, .. } = axis_ctrl {
+        if range.step > 1 && configured_step % range.step != 0 {
+            warn!(
+                "[ptz] {}_step = {} is not a multiple of V4L2 {}_absolute step = {}; \
+                 actual motion will snap to the lattice",
+                axis, configured_step, axis, range.step
+            );
+        }
+    }
+}
+
 impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
     pub fn new(runner: R, device: String, parsed: &ParsedControls, cfg: &PtzConfig) -> Self {
         let pan = AxisCtrl::from_parsed("pan", parsed);
         let tilt = AxisCtrl::from_parsed("tilt", parsed);
+        warn_if_step_misaligned("pan", &pan, cfg.pan_step);
+        warn_if_step_misaligned("tilt", &tilt, cfg.tilt_step);
         // Override caps to match what the driver can actually do, not
         // just what `--list-ctrls` parsed. The trait's capabilities() is
         // the runtime contract; consumers branching on it must not see
@@ -252,7 +273,12 @@ impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
             }
             AxisCtrl::Absolute { current, range } => {
                 let mut guard = current.lock().await;
-                let next = (*guard + sign * step).clamp(range.min, range.max);
+                // Snap the target onto the V4L2 control's lattice
+                // (`min + N*step`). Without this, a hardware whose step
+                // disagrees with the configured step would reject every
+                // --set-ctrl write outright. snap() also clamps to
+                // [min, max], so the manual clamp is no longer needed.
+                let next = range.snap(*guard + sign * step);
                 let arg = format!("--set-ctrl={}_absolute={}", ctrl_prefix, next);
                 self.runner.run(&["-d", &self.device, &arg]).await?;
                 *guard = next;

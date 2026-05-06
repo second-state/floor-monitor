@@ -16,6 +16,29 @@ pub struct ControlRange {
     pub step: i32,
 }
 
+impl ControlRange {
+    /// Snap a value to the nearest legal point on the V4L2 control's
+    /// lattice. The V4L2 spec requires writes to integer absolute
+    /// controls to be of the form `min + N*step` for non-negative N
+    /// — values off-lattice are rejected by the driver. Without this,
+    /// a hardware whose `step` differs from the configured `pan_step`
+    /// /`tilt_step` would reject every `--set-ctrl` invocation.
+    ///
+    /// Round-half-to-even-ish: we use round-half-up via integer
+    /// arithmetic. Edge case: a step of 0 or 1 means no granularity to
+    /// enforce, just clamp.
+    pub fn snap(&self, value: i32) -> i32 {
+        let clamped = value.clamp(self.min, self.max);
+        if self.step <= 1 {
+            return clamped;
+        }
+        // offset is non-negative because clamped >= self.min.
+        let offset = clamped - self.min;
+        let q = (offset + self.step / 2) / self.step;
+        (q * self.step + self.min).clamp(self.min, self.max)
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ParsedControls {
     pub names: HashSet<String>,
@@ -176,6 +199,71 @@ mod tests {
     fn parse_skips_section_header() {
         let p = parse_list_ctrls("User Controls\n");
         assert!(p.names.is_empty());
+    }
+
+    #[test]
+    fn snap_aligned_value_is_unchanged() {
+        let r = ControlRange {
+            min: -36000,
+            max: 36000,
+            step: 3600,
+        };
+        assert_eq!(r.snap(0), 0);
+        assert_eq!(r.snap(3600), 3600);
+        assert_eq!(r.snap(-7200), -7200);
+        assert_eq!(r.snap(36000), 36000);
+        assert_eq!(r.snap(-36000), -36000);
+    }
+
+    #[test]
+    fn snap_off_lattice_value_rounds_to_nearest() {
+        let r = ControlRange {
+            min: 0,
+            max: 100,
+            step: 10,
+        };
+        assert_eq!(r.snap(13), 10); // 13 closer to 10
+        assert_eq!(r.snap(15), 20); // round-half-up
+        assert_eq!(r.snap(17), 20);
+        assert_eq!(r.snap(99), 100);
+    }
+
+    #[test]
+    fn snap_clamps_to_range() {
+        let r = ControlRange {
+            min: -100,
+            max: 100,
+            step: 10,
+        };
+        assert_eq!(r.snap(200), 100);
+        assert_eq!(r.snap(-200), -100);
+    }
+
+    #[test]
+    fn snap_with_step_one_is_pure_clamp() {
+        let r = ControlRange {
+            min: 0,
+            max: 100,
+            step: 1,
+        };
+        assert_eq!(r.snap(13), 13);
+        assert_eq!(r.snap(150), 100);
+    }
+
+    #[test]
+    fn snap_with_offset_min() {
+        // Range starts at non-zero min — values are min + N*step.
+        let r = ControlRange {
+            min: -180,
+            max: 180,
+            step: 12,
+        };
+        // -180 + 0*12 = -180, -180 + 1*12 = -168, ..., 0 = -180 + 15*12.
+        assert_eq!(r.snap(-180), -180);
+        assert_eq!(r.snap(-168), -168);
+        assert_eq!(r.snap(-160), -156); // closer to -168+12=-156
+        assert_eq!(r.snap(0), 0);
+        assert_eq!(r.snap(180), 180);
     }
 
     #[test]
