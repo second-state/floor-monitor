@@ -164,5 +164,29 @@ pub fn device_path(camera: &CameraConfig, ptz: &PtzConfig) -> String {
 pub fn load_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
     let config: Config = toml::from_str(&content)?;
+    validate_ptz_config(&config.ptz)?;
     Ok(config)
+}
+
+/// Reject misconfigured step sizes early. A `pan_step` of `0` makes
+/// absolute-mode pan a silent no-op (acks succeed but the lens never
+/// moves); negative values flip the direction semantics without
+/// telling the user. Failing fast at config load is more useful than
+/// debugging "why doesn't pan_left work?" later.
+fn validate_ptz_config(cfg: &PtzConfig) -> Result<(), String> {
+    if cfg.pan_step <= 0 {
+        return Err(format!(
+            "[ptz] pan_step must be a positive integer, got {}; \
+             use [ptz] enabled = false to disable pan/tilt instead",
+            cfg.pan_step
+        ));
+    }
+    if cfg.tilt_step <= 0 {
+        return Err(format!(
+            "[ptz] tilt_step must be a positive integer, got {}; \
+             use [ptz] enabled = false to disable pan/tilt instead",
+            cfg.tilt_step
+        ));
+    }
+    Ok(())
 }

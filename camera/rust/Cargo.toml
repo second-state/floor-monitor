@@ -39,5 +39,8 @@ nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 image = { version = "0.25", features = ["jpeg"], optional = true }
 base64 = { version = "0.22", optional = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.dev.package."*"]
 debug = false

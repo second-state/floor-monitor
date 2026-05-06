@@ -1,6 +1,7 @@
 //! Tests for `[ptz]` and `[ptz.patrol]` block parsing.
 
-use floor_monitor_camera::config::{device_path, Config, PtzConfig};
+use floor_monitor_camera::config::{device_path, load_config, Config, PtzConfig};
+use std::io::Write;
 
 const MINIMAL_TOML: &str = r#"
 [server]
@@ -111,4 +112,93 @@ fn ptz_config_default_is_enabled() {
     assert!(p.enabled);
     assert_eq!(p.pan_step, 3600);
     assert!(!p.invert_pan);
+}
+
+// ---- Validation: pan_step / tilt_step must be positive --------------
+
+fn write_temp_config(contents: &str) -> tempfile::NamedTempFile {
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(contents.as_bytes()).unwrap();
+    f
+}
+
+#[test]
+fn load_config_rejects_zero_pan_step() {
+    let f = write_temp_config(
+        r#"
+[server]
+ws_url = "ws://127.0.0.1:3456/ws"
+
+[camera]
+id = "c"
+name = "n"
+
+[ptz]
+pan_step = 0
+"#,
+    );
+    let err = load_config(f.path()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("pan_step") && msg.contains("positive"),
+        "expected validation error mentioning pan_step, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn load_config_rejects_negative_pan_step() {
+    let f = write_temp_config(
+        r#"
+[server]
+ws_url = "ws://127.0.0.1:3456/ws"
+
+[camera]
+id = "c"
+name = "n"
+
+[ptz]
+pan_step = -100
+"#,
+    );
+    let err = load_config(f.path()).unwrap_err();
+    assert!(err.to_string().contains("pan_step"));
+}
+
+#[test]
+fn load_config_rejects_zero_tilt_step() {
+    let f = write_temp_config(
+        r#"
+[server]
+ws_url = "ws://127.0.0.1:3456/ws"
+
+[camera]
+id = "c"
+name = "n"
+
+[ptz]
+tilt_step = 0
+"#,
+    );
+    let err = load_config(f.path()).unwrap_err();
+    assert!(err.to_string().contains("tilt_step"));
+}
+
+#[test]
+fn load_config_accepts_positive_steps() {
+    let f = write_temp_config(
+        r#"
+[server]
+ws_url = "ws://127.0.0.1:3456/ws"
+
+[camera]
+id = "c"
+name = "n"
+
+[ptz]
+pan_step = 1
+tilt_step = 1
+"#,
+    );
+    load_config(f.path()).expect("positive steps should load cleanly");
 }
