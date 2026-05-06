@@ -24,9 +24,10 @@ impl ControlRange {
     /// a hardware whose `step` differs from the configured `pan_step`
     /// /`tilt_step` would reject every `--set-ctrl` invocation.
     ///
-    /// Round-half-to-even-ish: we use round-half-up via integer
-    /// arithmetic. Edge case: a step of 0 or 1 means no granularity to
-    /// enforce, just clamp.
+    /// Rounding is round-half-up via integer arithmetic
+    /// (`(offset + step/2) / step`): exactly-halfway values round
+    /// toward positive infinity. Edge case: a step of 0 or 1 means no
+    /// granularity to enforce, so we just clamp.
     pub fn snap(&self, value: i32) -> i32 {
         let clamped = value.clamp(self.min, self.max);
         if self.step <= 1 {
