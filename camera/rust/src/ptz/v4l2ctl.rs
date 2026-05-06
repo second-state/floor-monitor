@@ -201,15 +201,23 @@ impl<R: V4l2CtlRunner> V4l2CtlPtz<R> {
     pub fn new(runner: R, device: String, parsed: &ParsedControls, cfg: &PtzConfig) -> Self {
         let pan = AxisCtrl::from_parsed("pan", parsed);
         let tilt = AxisCtrl::from_parsed("tilt", parsed);
-        // Override caps.home to match what the driver can actually do:
-        // the parser sees "both pan_absolute and tilt_absolute exist" and
-        // would set home=true, but if AxisCtrl picked Relative for either
-        // axis (because pan_relative was also present) home() will return
-        // Unsupported at runtime. Reporting the runtime contract avoids
-        // capability/implementation drift visible to consumers.
+        // Override caps to match what the driver can actually do, not
+        // just what `--list-ctrls` parsed. The trait's capabilities() is
+        // the runtime contract; consumers branching on it must not see
+        // a `true` for a method whose default impl returns Unsupported.
+        // - `home`: only true if BOTH axes ended up in Absolute mode
+        //   (parser-level inference would say true whenever both
+        //   pan_absolute and tilt_absolute exist, but if pan_relative
+        //   was also present AxisCtrl::from_parsed picks Relative and
+        //   home() returns Unsupported).
+        // - `zoom`: V4l2CtlPtz doesn't override Ptz::zoom yet (zoom is
+        //   out of scope per issue #1), so the trait's default impl
+        //   returns Unsupported. Force the cap off until zoom_absolute /
+        //   zoom_relative driving lands.
         let mut caps = PtzCapabilities::from_controls(parsed);
         caps.home =
             matches!(pan, AxisCtrl::Absolute { .. }) && matches!(tilt, AxisCtrl::Absolute { .. });
+        caps.zoom = false;
         Self {
             runner,
             device,

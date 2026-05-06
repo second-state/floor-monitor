@@ -491,6 +491,31 @@ async fn capabilities_match_parsed_controls_for_relative_only() {
 }
 
 #[tokio::test]
+async fn capabilities_zoom_false_when_driver_does_not_implement_zoom() {
+    // Camera exposes zoom_absolute (parser would set caps.zoom=true), but
+    // V4l2CtlPtz doesn't override Ptz::zoom — the default impl returns
+    // Unsupported. capabilities().zoom must reflect that runtime contract,
+    // not the parser's data-level inference.
+    const PAN_TILT_ZOOM: &str = "
+                   pan_absolute 0x009a0908 (int) : min=-36000 max=36000 step=3600 default=0 value=0
+                  tilt_absolute 0x009a0909 (int) : min=-18000 max=18000 step=1800 default=0 value=0
+                  zoom_absolute 0x009a090d (int) : min=100 max=500 step=1 default=100 value=100
+";
+    let h = harness(PAN_TILT_ZOOM, cfg());
+    let c = h.ptz.capabilities();
+    assert!(c.pan);
+    assert!(c.tilt);
+    assert!(
+        !c.zoom,
+        "zoom must be false: V4l2CtlPtz does not implement Ptz::zoom"
+    );
+    // Sanity: zoom() actually returns Unsupported.
+    use floor_monitor_camera::ptz::ZoomDir;
+    let err = h.ptz.zoom(ZoomDir::In).await.unwrap_err();
+    assert!(matches!(err, PtzError::Unsupported("zoom")));
+}
+
+#[tokio::test]
 async fn capabilities_home_false_when_driver_picks_relative_over_absolute() {
     // Both pan_relative AND pan_absolute (and same for tilt) are present
     // in --list-ctrls. AxisCtrl::from_parsed prefers Relative, so
