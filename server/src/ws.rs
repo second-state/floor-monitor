@@ -262,11 +262,7 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-async fn process_frame(
-    state: &AppState,
-    camera_id: &str,
-    jpeg_bytes: &[u8],
-) -> Option<String> {
+async fn process_frame(state: &AppState, camera_id: &str, jpeg_bytes: &[u8]) -> Option<String> {
     // Update latest frame
     let frame_event = {
         let mut cameras = state.cameras.write().await;

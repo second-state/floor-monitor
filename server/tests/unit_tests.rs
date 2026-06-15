@@ -393,8 +393,7 @@ fn test_sse_event_serializes_with_kind_tag() {
         running: true,
         capabilities: vec!["ptz".to_string()],
     };
-    let json =
-        serde_json::to_string(&floor_monitor_server::state::SseEvent::Frame(frame)).unwrap();
+    let json = serde_json::to_string(&floor_monitor_server::state::SseEvent::Frame(frame)).unwrap();
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(v["kind"], "frame");
     assert_eq!(v["camera_id"], "cam1");
