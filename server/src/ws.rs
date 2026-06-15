@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::state::{AppState, CameraState, FrameResult};
+use crate::state::{AppState, CameraFrameEvent, CameraState, FrameResult};
 
 /// WebSocket upgrade handler for camera clients.
 pub async fn ws_handler(
@@ -158,8 +158,10 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
             Ok(Message::Binary(b)) => {
                 if let Some(ref cid) = camera_id {
                     let jpeg_bytes = b.to_vec();
-                    let mut sender = ws_sender.lock().await;
-                    process_frame(&state, cid, &jpeg_bytes, &mut *sender).await;
+                    if let Some(reply) = process_frame(&state, cid, &jpeg_bytes).await {
+                        let mut sender = ws_sender.lock().await;
+                        let _ = sender.send(Message::Text(reply.into())).await;
+                    }
                 }
                 continue;
             }
@@ -229,8 +231,10 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
                         continue;
                     }
                 };
-                let mut sender = ws_sender.lock().await;
-                process_frame(&state, &cid, &jpeg_bytes, &mut *sender).await;
+                if let Some(reply) = process_frame(&state, &cid, &jpeg_bytes).await {
+                    let mut sender = ws_sender.lock().await;
+                    let _ = sender.send(Message::Text(reply.into())).await;
+                }
             }
             CameraMessage::CommandAck {
                 camera_id: cid,
@@ -258,24 +262,32 @@ async fn handle_camera_ws(socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-async fn process_frame(
-    state: &AppState,
-    camera_id: &str,
-    jpeg_bytes: &[u8],
-    sender: &mut (impl SinkExt<Message> + Unpin),
-) {
+async fn process_frame(state: &AppState, camera_id: &str, jpeg_bytes: &[u8]) -> Option<String> {
     // Update latest frame
-    let frame_no = {
+    let frame_event = {
         let mut cameras = state.cameras.write().await;
         if let Some(cam) = cameras.get_mut(camera_id) {
             cam.latest_frame = Some(jpeg_bytes.to_vec());
             cam.frame_no += 1;
-            cam.frame_no
+            CameraFrameEvent {
+                camera_id: cam.camera_id.clone(),
+                name: cam.name.clone(),
+                frame_no: cam.frame_no,
+                running: cam.running,
+                capabilities: cam.capabilities.clone(),
+            }
         } else {
             warn!("Frame from unregistered camera {}", camera_id);
-            return;
+            return None;
         }
     };
+    let frame_no = frame_event.frame_no;
+
+    // Broadcast the fresh frame immediately. VLM inference may take seconds,
+    // but the dashboard preview and frame counter should still stay live.
+    let frame_event_json =
+        serde_json::to_string(&crate::state::SseEvent::Frame(frame_event)).unwrap_or_default();
+    let _ = state.events_tx.send(frame_event_json);
 
     // Get the prompt — use the default monitor profile prompt
     let profile_id = &state.config.monitor.default_profile;
@@ -341,7 +353,5 @@ async fn process_frame(
         text,
         infer_secs,
     };
-    let _ = sender
-        .send(Message::Text(serde_json::to_string(&reply).unwrap().into()))
-        .await;
+    serde_json::to_string(&reply).ok()
 }

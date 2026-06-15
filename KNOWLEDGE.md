@@ -157,19 +157,21 @@ The Telegram bot only responds to incoming messages. It does not stream frames o
 
 ### Shared Config Format
 
-Both Python and Rust camera clients read the same `camera.toml` file (TOML format). The Python client supports both local and RTSP cameras; the Rust client currently supports local cameras only.
+Both Python and Rust camera clients read the same `camera.toml` file (TOML format). The Python client supports local cameras, RTSP cameras, and optional ONVIF PTZ control for IP cameras. The Rust client currently supports local cameras only.
 
 ### Capabilities
 
-The `capabilities` field in `camera.toml` is an optional list of strings (e.g. `["ptz", "patrol"]`). It's sent during WebSocket registration and determines whether the server will route movement commands to this camera. Fixed cameras should omit this field or set it to `[]`.
+The `capabilities` field in `camera.toml` is an optional list of strings (e.g. `["ptz", "patrol"]`). It's sent during WebSocket registration and determines whether the server will route movement commands to this camera. Fixed cameras should omit this field or set it to `[]`. For Python ONVIF PTZ cameras, leave this empty; when `[onvif].enabled = true` and the ONVIF controller initializes successfully, the Python client automatically advertises `["ptz", "patrol"]`.
 
 ### Command Handling
 
-After receiving an inference result, camera clients poll for pending command messages with a short timeout. Commands have `action` ("ptz", "patrol") and `params` (e.g. `{"direction": "pan_left"}`). The client sends a `command_ack` response. The Python client logs commands but does not implement actual motor control — that depends on the camera hardware.
+After receiving an inference result, camera clients poll for pending command messages with a short timeout. Commands have `action` ("ptz", "patrol") and `params` (e.g. `{"direction": "pan_left"}`). The client sends a `command_ack` response. The Python client maps PTZ commands to ONVIF `ContinuousMove` followed by `Stop` when `[onvif].enabled = true`; otherwise PTZ commands fail with a clear acknowledgment message.
+
+For ONVIF PTZ cameras, set `[camera].rtsp_from_onvif_profile = true` when possible. The Python client will use `GetStreamUri` for the selected `[onvif].profile_index` and add the ONVIF credentials to that RTSP URI. This avoids controlling one ONVIF media profile while the dashboard displays a different manually-entered RTSP path.
 
 ### Reconnection
 
-Both clients implement auto-reconnect with a 5-second backoff. On reconnect, the camera re-registers with its capabilities.
+Both clients implement auto-reconnect with a 5-second backoff. On reconnect, the camera re-registers with its capabilities. The Python client also reopens RTSP capture after repeated failed frame reads, controlled by `[camera].reopen_after_failures` (default 10, set 0 to disable). For high-FPS RTSP cameras where OpenCV buffers stale frames, use `[camera].rtsp_flush_frames` to drop buffered frames on each capture and keep `[camera].reopen_after_ptz = true` so movement commands force a fresh RTSP session.
 
 ## Testing
 

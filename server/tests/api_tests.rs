@@ -177,6 +177,22 @@ async fn test_api_snapshot_with_frame() {
             .unwrap(),
         "image/jpeg"
     );
+    assert_eq!(
+        resp.headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "inline; filename=\"cam1.jpg\""
+    );
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "no-store, no-cache, must-revalidate"
+    );
     let body = resp.bytes().await.unwrap();
     assert_eq!(body.as_ref(), &fake_jpeg);
 }

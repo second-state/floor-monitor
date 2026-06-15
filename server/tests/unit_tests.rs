@@ -385,6 +385,21 @@ fn test_sse_event_serializes_with_kind_tag() {
     assert_eq!(v["kind"], "summary");
     assert_eq!(v["window_min"], 30);
     assert_eq!(v["text"], "all quiet");
+
+    let frame = floor_monitor_server::state::CameraFrameEvent {
+        camera_id: "cam1".to_string(),
+        name: "Camera 1".to_string(),
+        frame_no: 8,
+        running: true,
+        capabilities: vec!["ptz".to_string()],
+    };
+    let json = serde_json::to_string(&floor_monitor_server::state::SseEvent::Frame(frame)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["kind"], "frame");
+    assert_eq!(v["camera_id"], "cam1");
+    assert_eq!(v["name"], "Camera 1");
+    assert_eq!(v["frame_no"], 8);
+    assert_eq!(v["running"], true);
 }
 
 // --- Context digest tests ---

@@ -37,11 +37,24 @@ pub struct SummaryEntry {
     pub text: String,
 }
 
+/// Lightweight live frame event emitted as soon as a frame reaches the server.
+/// This is intentionally independent from VLM results so the dashboard preview
+/// can update even while inference is slow or unavailable.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CameraFrameEvent {
+    pub camera_id: String,
+    pub name: String,
+    pub frame_no: u64,
+    pub running: bool,
+    pub capabilities: Vec<String>,
+}
+
 /// Tagged envelope for SSE events. Internally tagged so consumers can
 /// branch on the `kind` field without nested wrapping.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SseEvent {
+    Frame(CameraFrameEvent),
     Result(FrameResult),
     Summary(SummaryEntry),
 }
