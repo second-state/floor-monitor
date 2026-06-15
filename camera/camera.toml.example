@@ -17,6 +17,9 @@ source_type = "local"
 device_index = 0
 # For RTSP cameras: full URL with credentials
 # rtsp_url = "rtsp://user:pass@192.168.1.10:554/stream1"
+# For ONVIF PTZ cameras, prefer the RTSP URI from the selected ONVIF media
+# profile so video and motor control target the same camera profile.
+# rtsp_from_onvif_profile = true
 
 # Frame capture interval in seconds
 interval = 2.0
@@ -24,8 +27,53 @@ interval = 2.0
 max_dimension = 768
 # JPEG quality (1-100)
 jpeg_quality = 85
+# Reopen the RTSP capture after this many consecutive failed frame reads.
+# Set to 0 to disable automatic camera reconnect.
+reopen_after_failures = 10
+# Drop this many buffered RTSP frames before encoding each dashboard frame.
+# Useful when OpenCV/FFmpeg lags behind a high-FPS IP camera stream.
+rtsp_flush_frames = 0
+# Reopen RTSP after successful PTZ/patrol commands so the displayed view
+# catches up immediately on cameras that buffer aggressively.
+reopen_after_ptz = true
 
-# Capabilities this camera supports. The server uses these to decide
-# whether to send movement commands. Common values: "ptz", "patrol".
+# Capabilities this camera supports. The server uses these to decide whether
+# to send movement commands. Common values: "ptz", "patrol".
+#
+# For Python ONVIF PTZ cameras, leave this empty. When [onvif].enabled = true
+# and the ONVIF controller initializes successfully, the Python client
+# automatically advertises ["ptz", "patrol"].
 # Leave empty for fixed cameras (e.g. Mac built-in webcam).
 # capabilities = ["ptz", "patrol"]
+
+# ----- ONVIF PTZ controller (Python client only) -----
+# RTSP carries video; ONVIF sends movement commands. Enable this for IP
+# cameras that expose ONVIF PTZ.
+[onvif]
+enabled = false
+# host = "192.168.1.73"
+# scheme = "http"  # use "https" for cameras that expose ONVIF on TLS
+# port = 80
+# username = "user"
+# password = "pass"
+# Or keep the password out of this file:
+# password_env = "CAMERA_ONVIF_PASSWORD"
+# verify_tls = true  # set false for self-signed local camera certificates
+# timeout_seconds = 10.0
+
+# Which ONVIF media profile token to control. Usually 0 is the main profile.
+profile_index = 0
+
+# ContinuousMove velocity and duration for one dashboard/Telegram command.
+# Speeds are normalized to 0.05..1.0 before sending to the camera.
+pan_speed = 0.35
+tilt_speed = 0.35
+move_seconds = 0.35
+
+# Flip an axis if the camera moves opposite to the dashboard button labels.
+invert_pan = false
+invert_tilt = false
+
+# Patrol performs left N steps, right 2N steps, then left N steps.
+patrol_steps = 3
+patrol_pause_seconds = 0.15

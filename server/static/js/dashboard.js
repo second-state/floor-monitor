@@ -39,6 +39,8 @@
                 const data = JSON.parse(event.data);
                 if (data.kind === "summary") {
                     prependSummary(data);
+                } else if (data.kind === "frame") {
+                    updateCameraFrame(data);
                 } else {
                     // kind === "result" or legacy untagged payload
                     prependResult(data);
@@ -124,6 +126,66 @@
         }
     }
 
+    function updateCameraFrame(f) {
+        const list = document.getElementById("camera-list");
+        if (!list || !f.camera_id) return;
+
+        const placeholder = list.querySelector(".muted");
+        if (placeholder) placeholder.remove();
+
+        let card = list.querySelector(
+            '.camera-card[data-camera-id="' + cssEscape(f.camera_id) + '"]'
+        );
+        if (!card) {
+            card = document.createElement("div");
+            card.className = "camera-card";
+            card.setAttribute("data-camera-id", f.camera_id);
+            card.innerHTML =
+                '<div class="camera-header">' +
+                '<span class="status-dot"></span>' +
+                '<strong></strong>' +
+                '<span class="frame-count"></span>' +
+                "</div>" +
+                '<div class="camera-preview"></div>';
+            list.appendChild(card);
+        }
+
+        card.classList.toggle("active", !!f.running);
+
+        const dot = card.querySelector(".status-dot");
+        if (dot) {
+            dot.classList.toggle("connected", !!f.running);
+            dot.classList.toggle("disconnected", !f.running);
+        }
+
+        const name = card.querySelector(".camera-header strong");
+        if (name) name.textContent = f.name || f.camera_id;
+
+        const count = card.querySelector(".frame-count");
+        if (count) {
+            count.id = "frame-count-" + f.camera_id;
+            count.textContent = "Frame #" + f.frame_no;
+        }
+
+        const preview = card.querySelector(".camera-preview");
+        if (preview) {
+            let img = preview.querySelector(".preview-img");
+            if (!img) {
+                preview.textContent = "";
+                img = document.createElement("img");
+                img.alt = "Camera preview";
+                img.id = "preview-" + f.camera_id;
+                img.className = "preview-img";
+                preview.appendChild(img);
+            }
+            img.setAttribute(
+                "data-snapshot-url",
+                "/api/snapshot/" + encodeURIComponent(f.camera_id)
+            );
+            refreshPreviewImage(img, f.frame_no);
+        }
+    }
+
     function prependSummary(s) {
         if (!summariesContainer) return;
 
@@ -167,14 +229,55 @@
     }
 
     // --- Preview polling ---
+    function snapshotUrlForImage(img) {
+        const configured = img.getAttribute("data-snapshot-url");
+        if (configured) return configured;
+
+        const src = img.getAttribute("src") || "";
+        if (!src || src.indexOf("/api/snapshot/") === -1) return "";
+
+        const url = new URL(src, window.location.origin);
+        img.setAttribute("data-snapshot-url", url.pathname);
+        return url.pathname;
+    }
+
+    function refreshPreviewImage(img, frameNo) {
+        const base = snapshotUrlForImage(img);
+        if (!base || img.getAttribute("data-loading") === "1") return;
+
+        img.setAttribute("data-loading", "1");
+        const url = base + "?t=" + Date.now() + (frameNo ? "&frame=" + frameNo : "");
+
+        fetch(url, {
+            cache: "no-store",
+            headers: { "Cache-Control": "no-cache" },
+        })
+            .then(function (r) {
+                if (!r.ok) throw new Error("snapshot HTTP " + r.status);
+                return r.blob();
+            })
+            .then(function (blob) {
+                const nextUrl = URL.createObjectURL(blob);
+                const prevUrl = img.getAttribute("data-object-url");
+                img.onload = function () {
+                    if (prevUrl) URL.revokeObjectURL(prevUrl);
+                    img.onload = null;
+                };
+                img.src = nextUrl;
+                img.setAttribute("data-object-url", nextUrl);
+            })
+            .catch(function (e) {
+                console.warn("Preview refresh failed:", e);
+            })
+            .finally(function () {
+                img.removeAttribute("data-loading");
+            });
+    }
+
     function pollPreviews() {
         const imgs = document.querySelectorAll(".preview-img");
         imgs.forEach(function (img) {
-            const src = img.getAttribute("src");
-            if (src) {
-                const base = src.split("?")[0];
-                img.src = base + "?t=" + Date.now();
-            }
+            refreshPreviewImage(img);
         });
     }
 
@@ -303,7 +406,7 @@ function downloadSnapshot() {
         alert("No camera connected");
         return;
     }
-    var src = img.getAttribute("src").split("?")[0];
+    var src = img.getAttribute("data-snapshot-url") || img.getAttribute("src").split("?")[0];
     // Cache-bust so we always grab the freshest frame, not a cached one.
     var url = src + "?t=" + Date.now();
     var camId = "snapshot";

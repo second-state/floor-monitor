@@ -20,7 +20,9 @@
                     </div>
                     <div class="camera-preview">
                         {% if cam.running %}
-                        <img src="/api/snapshot/{{ cam.camera_id }}" alt="Camera preview"
+                        <img src="/api/snapshot/{{ cam.camera_id }}"
+                             data-snapshot-url="/api/snapshot/{{ cam.camera_id }}"
+                             alt="Camera preview"
                              id="preview-{{ cam.camera_id }}" class="preview-img">
                         {% else %}
                         <div class="no-preview">Offline</div>

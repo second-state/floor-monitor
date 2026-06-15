@@ -125,9 +125,8 @@ pub async fn api_summaries(State(state): State<Arc<AppState>>) -> impl IntoRespo
 }
 
 /// GET /api/snapshot/:camera_id — latest JPEG frame for a camera.
-/// Sends `Content-Disposition: attachment` so browsers always treat this
-/// as a download. Without it, clicking "Download Snapshot" can navigate
-/// the dashboard tab to the JPEG and tear down the SSE connection.
+/// Keep this response preview-friendly: dashboard `<img>` elements poll it
+/// frequently, while explicit downloads are handled by `<a download>`.
 pub async fn api_snapshot(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(camera_id): axum::extract::Path<String>,
@@ -136,12 +135,15 @@ pub async fn api_snapshot(
     if let Some(cam) = cameras.get(&camera_id) {
         if let Some(ref jpeg) = cam.latest_frame {
             let filename = format!("{}.jpg", camera_id);
-            let disposition = format!("attachment; filename=\"{}\"", filename);
+            let disposition = format!("inline; filename=\"{}\"", filename);
             return (
                 StatusCode::OK,
                 [
                     ("content-type", "image/jpeg"),
                     ("content-disposition", disposition.as_str()),
+                    ("cache-control", "no-store, no-cache, must-revalidate"),
+                    ("pragma", "no-cache"),
+                    ("expires", "0"),
                 ],
                 jpeg.clone(),
             )

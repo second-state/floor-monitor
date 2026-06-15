@@ -2,3 +2,5 @@ opencv-python>=4.8
 Pillow>=10.0
 websockets>=12.0
 toml>=0.10
+onvif-zeep>=0.2.12
+urllib3<2

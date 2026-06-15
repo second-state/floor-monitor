@@ -37,9 +37,10 @@ OpenAI-compatible APIs — the server itself loads no models.
   patrol, history summaries.
 - **Camera control** — Server sends PTZ and patrol commands to capable cameras
   via WebSocket. Cameras report capabilities on registration; fixed cameras
-  (e.g. Mac webcam) are never sent movement commands.
-- **Dual camera clients** — Python (USB + RTSP) and Rust (USB only), sharing
-  the same `camera.toml` config format.
+  (e.g. Mac webcam) are never sent movement commands. The Python client can
+  drive ONVIF PTZ cameras while using RTSP for video.
+- **Dual camera clients** — Python (USB + RTSP + ONVIF PTZ) and Rust (USB only),
+  sharing the same `camera.toml` config format.
 - **Multi-camera** — Multiple camera clients can connect simultaneously.
 
 ## Quick Start
@@ -161,9 +162,51 @@ interval = 2.0
 max_dimension = 768
 jpeg_quality = 85
 # capabilities = ["ptz", "patrol"]  # for PTZ-capable cameras
+
+[onvif]  # optional, Python client only
+enabled = false
+# host = "192.168.1.10"
+# scheme = "http"
+# port = 80
+# username = "user"
+# password = "pass"
+# password_env = "CAMERA_ONVIF_PASSWORD"
+# verify_tls = true
 ```
 
 Both Python and Rust camera clients read this same file.
+
+For ONVIF PTZ IP cameras, keep video on RTSP and control on ONVIF:
+
+```toml
+[camera]
+source_type = "rtsp"
+# Prefer the stream URI returned by the selected ONVIF media profile so the
+# video feed matches the PTZ profile being controlled.
+rtsp_from_onvif_profile = true
+# Optional RTSP freshness controls for high-FPS IP cameras.
+reopen_after_ptz = true
+# Keep 0 unless the live feed lags behind even without PTZ; try 30 if needed.
+rtsp_flush_frames = 0
+# Or provide an explicit RTSP URL if ONVIF media discovery is unavailable.
+# rtsp_url = "rtsp://user:pass@192.168.1.73:554/stream1"
+
+[onvif]
+enabled = true
+host = "192.168.1.73"
+scheme = "http"
+port = 2020  # TP-Link/Tapo commonly uses 2020; many cameras use 80
+username = "user"
+password_env = "CAMERA_ONVIF_PASSWORD"
+pan_speed = 0.5
+move_seconds = 0.6
+invert_pan = true  # flip if left/right move opposite to button labels
+```
+
+When ONVIF initializes successfully, the Python client automatically registers
+`ptz` and `patrol` capabilities with the server. Dashboard and Telegram commands
+then use ONVIF `ContinuousMove` followed by `Stop`; RTSP is not used for motor
+control.
 
 ## Local Inference
 
