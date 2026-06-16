@@ -560,25 +560,36 @@ def onvif_enabled(cfg: dict) -> bool:
     return bool(cfg.get("onvif", {}).get("enabled", False))
 
 
-def build_ptz_controller(cfg: dict) -> OnvifPtzController | None:
-    if not onvif_enabled(cfg):
+def build_ptz_controller(cfg: dict):
+    """Pick a PTZ controller: ONVIF when enabled, else UVC/V4L2 for local cameras."""
+    if onvif_enabled(cfg):
+        try:
+            return OnvifPtzController(cfg)
+        except Exception as e:
+            log.error("ONVIF PTZ disabled: %s", e, exc_info=True)
+            return None
+
+    cam_cfg = cfg.get("camera", {})
+    if str(cam_cfg.get("source_type", "local")) != "local":
         return None
     try:
-        return OnvifPtzController(cfg)
+        controller = V4l2PtzController(cfg)
     except Exception as e:
-        log.error("ONVIF PTZ disabled: %s", e, exc_info=True)
+        log.info("V4L2 PTZ not available: %s", e)
         return None
+    if not controller.capabilities():
+        log.info("V4L2 PTZ: no pan/tilt/zoom controls on %s", controller.device)
+        return None
+    log.info("V4L2 PTZ ready on %s: %s", controller.device, controller.capabilities())
+    return controller
 
 
-def resolve_capabilities(
-    configured: list[str],
-    ptz_controller: OnvifPtzController | None,
-) -> list[str]:
-    """Return wire capabilities, adding PTZ only when ONVIF is ready."""
+def resolve_capabilities(configured: list[str], ptz_controller) -> list[str]:
+    """Return wire capabilities = configured + controller-reported (deduped)."""
     capabilities = list(dict.fromkeys(configured))
     if ptz_controller is None:
         return capabilities
-    for cap in ("ptz", "patrol"):
+    for cap in ptz_controller.capabilities():
         if cap not in capabilities:
             capabilities.append(cap)
     return capabilities
@@ -614,6 +625,21 @@ def handle_command(
                 log.warning("PTZ command failed: %s", e, exc_info=True)
                 success = False
                 message = f"PTZ {direction} failed: {e}"
+    elif action == "zoom":
+        direction = params.get("direction", "")
+        if ptz_controller is None:
+            success = False
+            message = "PTZ is not configured or failed to initialize"
+        else:
+            try:
+                ptz_controller.move(direction)
+                message = f"Zoom {direction} completed"
+                changed_view = True
+                log.info(message)
+            except Exception as e:
+                log.warning("Zoom command failed: %s", e, exc_info=True)
+                success = False
+                message = f"Zoom {direction} failed: {e}"
     elif action == "patrol":
         if ptz_controller is None:
             success = False

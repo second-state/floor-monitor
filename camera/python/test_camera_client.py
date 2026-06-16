@@ -10,6 +10,7 @@ from camera_client import (
     _parse_onvif_host,
     _rtsp_uri_with_credentials,
     _v4l2_axis_sign,
+    build_ptz_controller,
     capabilities_from_controls,
     handle_command,
     parse_v4l2_controls,
@@ -36,6 +37,9 @@ class FakePtzController:
 
     def patrol(self):
         self.patrols += 1
+
+    def capabilities(self):
+        return ["ptz", "patrol"]
 
 
 class CameraClientPtzTests(unittest.TestCase):
@@ -218,6 +222,33 @@ class CameraClientPtzTests(unittest.TestCase):
         self.assertTrue(changed_view)
         self.assertTrue(ws.messages[0]["success"])
         self.assertEqual(ptz.patrols, 1)
+
+    def test_zoom_command_calls_controller(self):
+        ws = FakeWebSocket()
+        ptz = FakePtzController()
+        changed = handle_command(
+            ws, {"action": "zoom", "params": {"direction": "zoom_in"}}, "cam1", ptz
+        )
+        self.assertTrue(changed)
+        self.assertTrue(ws.messages[0]["success"])
+        self.assertEqual(ptz.moves, ["zoom_in"])
+
+    def test_build_ptz_controller_uses_v4l2_for_local(self):
+        cfg = {"camera": {"source_type": "local", "device_index": 0}, "ptz": {}}
+
+        def runner(args):
+            return self.FULL_PTZ if any("--list-ctrls" in a for a in args) else ""
+
+        import camera_client
+
+        original = camera_client._v4l2_run
+        camera_client._v4l2_run = runner
+        try:
+            controller = build_ptz_controller(cfg)
+        finally:
+            camera_client._v4l2_run = original
+        self.assertIsInstance(controller, V4l2PtzController)
+        self.assertEqual(controller.capabilities(), ["ptz", "patrol", "zoom"])
 
 
 if __name__ == "__main__":
