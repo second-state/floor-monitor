@@ -153,6 +153,76 @@ impl Default for PtzConfig {
     }
 }
 
+/// Which physical axis a command targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    Pan,
+    Tilt,
+    Zoom,
+}
+
+/// Step direction. `Pos` = pan_right / tilt_up / zoom_in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dir {
+    Neg,
+    Pos,
+}
+
+/// Map a server `direction` string to (axis, direction).
+pub fn parse_direction(direction: &str) -> Option<(Axis, Dir)> {
+    match direction {
+        "pan_left" => Some((Axis::Pan, Dir::Neg)),
+        "pan_right" => Some((Axis::Pan, Dir::Pos)),
+        "tilt_down" => Some((Axis::Tilt, Dir::Neg)),
+        "tilt_up" => Some((Axis::Tilt, Dir::Pos)),
+        "zoom_out" => Some((Axis::Zoom, Dir::Neg)),
+        "zoom_in" => Some((Axis::Zoom, Dir::Pos)),
+        _ => None,
+    }
+}
+
+/// A motor controller. `step` moves one increment on an axis.
+pub trait Ptz: Send {
+    fn step(&mut self, axis: Axis, dir: Dir) -> Result<(), String>;
+    fn home(&mut self) -> Result<(), String>;
+}
+
+/// Fallback for cameras with no PTZ hardware (also non-Linux). Errors if driven;
+/// the server only routes movement to cameras that advertised the capability, so
+/// this path is defensive.
+pub struct NoopPtz;
+
+impl Ptz for NoopPtz {
+    fn step(&mut self, _axis: Axis, _dir: Dir) -> Result<(), String> {
+        Err("no PTZ hardware on this client".to_string())
+    }
+    fn home(&mut self) -> Result<(), String> {
+        Err("no PTZ hardware on this client".to_string())
+    }
+}
+
+/// Seam over the `v4l2-ctl` process so tests can inject a fake.
+pub trait CommandRunner: Send {
+    /// Run `v4l2-ctl <args>`; return stdout on success or stderr/message on error.
+    fn run(&self, args: &[String]) -> Result<String, String>;
+}
+
+/// Real runner: synchronously invokes `v4l2-ctl`.
+pub struct V4l2CtlRunner;
+
+impl CommandRunner for V4l2CtlRunner {
+    fn run(&self, args: &[String]) -> Result<String, String> {
+        let output = std::process::Command::new("v4l2-ctl")
+            .args(args)
+            .output()
+            .map_err(|e| format!("failed to run v4l2-ctl: {e}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +292,20 @@ power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=1 value=1
         assert_eq!(c.step_pan, 3600);
         assert_eq!(c.patrol_steps, 4);
         assert!((c.patrol_dwell_sec - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn direction_maps_to_axis_and_dir() {
+        assert_eq!(parse_direction("pan_left"), Some((Axis::Pan, Dir::Neg)));
+        assert_eq!(parse_direction("zoom_in"), Some((Axis::Zoom, Dir::Pos)));
+        assert_eq!(parse_direction("tilt_up"), Some((Axis::Tilt, Dir::Pos)));
+        assert_eq!(parse_direction("bogus"), None);
+    }
+
+    #[test]
+    fn noop_ptz_reports_unsupported() {
+        let mut p = NoopPtz;
+        assert!(p.step(Axis::Pan, Dir::Pos).is_err());
+        assert!(p.home().is_err());
     }
 }
