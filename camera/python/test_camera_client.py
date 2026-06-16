@@ -3,6 +3,7 @@ import unittest
 
 from camera_client import (
     OnvifPtzController,
+    V4l2PtzController,
     _clamp_speed,
     _direction_velocity,
     _parse_get_ctrl,
@@ -123,6 +124,36 @@ class CameraClientPtzTests(unittest.TestCase):
     def test_parse_get_ctrl(self):
         self.assertEqual(_parse_get_ctrl("pan_absolute: -7200\n", "pan_absolute"), -7200)
         self.assertIsNone(_parse_get_ctrl("other: 3", "pan_absolute"))
+
+    def _v4l2_controller(self, controls_text, get_value=0):
+        calls = []
+
+        def runner(args):
+            calls.append(args)
+            if any("--get-ctrl" in a for a in args):
+                name = args[-1].split("=", 1)[1]
+                return f"{name}: {get_value}\n"
+            if any("--list-ctrls" in a for a in args):
+                return controls_text
+            return ""
+
+        cfg = {"camera": {"device_index": 0}, "ptz": {}}
+        return V4l2PtzController(cfg, runner=runner), calls
+
+    def test_v4l2_absolute_move_clamps(self):
+        controller, calls = self._v4l2_controller(self.FULL_PTZ, get_value=34000)
+        controller.move("pan_right")
+        set_call = calls[-1]
+        self.assertIn("--set-ctrl=pan_absolute=36000", set_call)
+
+    def test_v4l2_capabilities(self):
+        controller, _ = self._v4l2_controller(self.FULL_PTZ)
+        self.assertEqual(controller.capabilities(), ["ptz", "patrol", "zoom"])
+
+    def test_v4l2_unsupported_axis_raises(self):
+        controller, _ = self._v4l2_controller(self.ZOOM_ONLY)
+        with self.assertRaises(ValueError):
+            controller.move("pan_left")
 
     def test_resolve_capabilities_adds_ptz_when_controller_ready(self):
         caps = resolve_capabilities(["custom"], FakePtzController())

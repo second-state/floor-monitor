@@ -208,6 +208,78 @@ def _v4l2_run(args: list[str]) -> str:
     return result.stdout
 
 
+class V4l2PtzController:
+    """UVC PTZ controller that shells out to v4l2-ctl. Same move/patrol/stop
+    interface as OnvifPtzController so handle_command treats them alike."""
+
+    def __init__(self, cfg: dict, runner=None, controls: dict | None = None):
+        ptz_cfg = cfg.get("ptz", {})
+        cam_cfg = cfg.get("camera", {})
+        self.runner = runner or _v4l2_run
+        self.device = str(
+            ptz_cfg.get("device") or f"/dev/video{int(cam_cfg.get('device_index', 0))}"
+        )
+        self.step_pan = int(ptz_cfg.get("step_pan", 3600))
+        self.step_tilt = int(ptz_cfg.get("step_tilt", 1800))
+        self.step_zoom = int(ptz_cfg.get("step_zoom", 50))
+        self.invert_pan = bool(ptz_cfg.get("invert_pan", False))
+        self.invert_tilt = bool(ptz_cfg.get("invert_tilt", False))
+        self.invert_zoom = bool(ptz_cfg.get("invert_zoom", False))
+        self.patrol_steps = max(1, int(ptz_cfg.get("patrol_steps", 4)))
+        self.patrol_dwell = max(0.0, float(ptz_cfg.get("patrol_dwell_sec", 1.5)))
+        if controls is None:
+            controls = parse_v4l2_controls(self.runner(["-d", self.device, "--list-ctrls"]))
+        self.controls = controls
+
+    def capabilities(self) -> list[str]:
+        return capabilities_from_controls(self.controls)
+
+    def _axis_params(self, axis: str) -> tuple[str, str, int, bool]:
+        if axis == "pan":
+            return "pan_absolute", "pan_relative", self.step_pan, self.invert_pan
+        if axis == "tilt":
+            return "tilt_absolute", "tilt_relative", self.step_tilt, self.invert_tilt
+        return "zoom_absolute", "zoom_relative", self.step_zoom, self.invert_zoom
+
+    def move(self, direction: str):
+        axis, sign = _v4l2_axis_sign(direction)
+        abs_name, rel_name, step, invert = self._axis_params(axis)
+        delta = step * sign
+        if invert:
+            delta = -delta
+        if abs_name in self.controls:
+            out = self.runner(["-d", self.device, f"--get-ctrl={abs_name}"])
+            current = _parse_get_ctrl(out, abs_name)
+            if current is None:
+                raise RuntimeError(f"could not read {abs_name}")
+            ctrl = self.controls[abs_name]
+            lo = ctrl.get("min", current)
+            hi = ctrl.get("max", current)
+            target = max(lo, min(hi, current + delta))
+            self.runner(["-d", self.device, f"--set-ctrl={abs_name}={target}"])
+        elif rel_name in self.controls:
+            self.runner(["-d", self.device, f"--set-ctrl={rel_name}={delta}"])
+        else:
+            raise ValueError(f"{axis} not supported by device {self.device}")
+        log.info("V4L2 PTZ move: %s on %s", direction, self.device)
+
+    def patrol(self):
+        sequence = (
+            ("pan_left", self.patrol_steps),
+            ("pan_right", self.patrol_steps * 2),
+            ("pan_left", self.patrol_steps),
+        )
+        for direction, count in sequence:
+            for _ in range(count):
+                self.move(direction)
+                if self.patrol_dwell > 0:
+                    time.sleep(self.patrol_dwell)
+
+    def stop(self):
+        # Absolute/relative V4L2 controls are momentary; nothing to stop.
+        pass
+
+
 class OnvifPtzController:
     """Synchronous ONVIF PTZ controller used by the Python camera client."""
 
