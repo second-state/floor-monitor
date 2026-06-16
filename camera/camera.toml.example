@@ -38,13 +38,16 @@ rtsp_flush_frames = 0
 reopen_after_ptz = true
 
 # Capabilities this camera supports. The server uses these to decide whether
-# to send movement commands. Common values: "ptz", "patrol".
+# to send movement commands. Common values: "ptz", "patrol", "zoom".
 #
-# For Python ONVIF PTZ cameras, leave this empty. When [onvif].enabled = true
-# and the ONVIF controller initializes successfully, the Python client
-# automatically advertises ["ptz", "patrol"].
-# Leave empty for fixed cameras (e.g. Mac built-in webcam).
-# capabilities = ["ptz", "patrol"]
+# Leave empty to auto-detect:
+#   - Python ONVIF cameras ([onvif].enabled = true) advertise ["ptz", "patrol"]
+#     (plus "zoom" when the camera exposes continuous zoom).
+#   - UVC/USB webcams (both clients, Linux) advertise based on the V4L2 controls
+#     detected via `v4l2-ctl --list-ctrls`.
+# Anything listed here is ADDED on top of detection — you can force a capability
+# but not suppress a detected one. Leave empty for fixed cameras (e.g. Mac webcam).
+# capabilities = ["ptz", "patrol", "zoom"]
 
 # ----- ONVIF PTZ controller (Python client only) -----
 # RTSP carries video; ONVIF sends movement commands. Enable this for IP
@@ -74,6 +77,31 @@ move_seconds = 0.35
 invert_pan = false
 invert_tilt = false
 
+# Zoom velocity for ONVIF cameras with continuous zoom (enables the `zoom`
+# capability). Normalized to 0.05..1.0.
+# zoom_speed = 0.35
+# invert_zoom = false
+
 # Patrol performs left N steps, right 2N steps, then left N steps.
 patrol_steps = 3
 patrol_pause_seconds = 0.15
+
+# ----- UVC PTZ controller (USB webcams, both clients) -----
+# For USB webcams that expose V4L2 PTZ controls on Linux. The client shells out
+# to `v4l2-ctl` (install `v4l-utils`). Capabilities are auto-detected from
+# `v4l2-ctl --list-ctrls`; an explicit [camera].capabilities list is added on top.
+# On non-Linux hosts or when v4l2-ctl is missing, no PTZ is advertised.
+[ptz]
+# V4L2 device. Defaults to /dev/video{device_index} when unset.
+# device = "/dev/video0"
+# Step size in V4L2 units per directional command (camera-specific).
+step_pan = 3600
+step_tilt = 1800
+step_zoom = 50
+# Flip an axis if the camera moves opposite to the button labels.
+invert_pan = false
+invert_tilt = false
+invert_zoom = false
+# Patrol = pan_left N, pan_right 2N, pan_left N, with a dwell between stops.
+patrol_steps = 4
+patrol_dwell_sec = 1.5
