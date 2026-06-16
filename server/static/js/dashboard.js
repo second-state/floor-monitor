@@ -9,6 +9,7 @@
     // timeout). Frame results are transient and don't need backfill.
     const SUMMARY_POLL_MS = 60000;
     const SSE_RECONNECT_MS = 3000;
+    const CAP_POLL_MS = 5000;
     const statusDot = document.getElementById("connection-status");
     const resultsContainer = document.getElementById("results-container");
     const summariesContainer = document.getElementById("summaries-container");
@@ -302,11 +303,35 @@
         });
     }
 
+    // Enable/disable control buttons based on whether any connected, running
+    // camera advertises the matching capability (the server routes each command
+    // to the first capable camera).
+    function refreshCapabilities() {
+        fetch("/api/cameras")
+            .then(function (r) { return r.json(); })
+            .then(function (list) {
+                const caps = new Set();
+                (list || []).forEach(function (c) {
+                    if (c.running && Array.isArray(c.capabilities)) {
+                        c.capabilities.forEach(function (cap) { caps.add(cap); });
+                    }
+                });
+                document.querySelectorAll("[data-capability]").forEach(function (btn) {
+                    const ok = caps.has(btn.getAttribute("data-capability"));
+                    btn.disabled = !ok;
+                    btn.classList.toggle("unsupported", !ok);
+                });
+            })
+            .catch(function (e) { console.warn("Capability refresh failed:", e); });
+    }
+
     // --- Init ---
     initTabs();
     connectSSE();
+    refreshCapabilities();
     setInterval(pollPreviews, PREVIEW_POLL_MS);
     setInterval(refreshSummaries, SUMMARY_POLL_MS);
+    setInterval(refreshCapabilities, CAP_POLL_MS);
 })();
 
 // --- Controls (global scope for onclick handlers) ---
