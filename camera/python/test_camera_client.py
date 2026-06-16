@@ -5,9 +5,13 @@ from camera_client import (
     OnvifPtzController,
     _clamp_speed,
     _direction_velocity,
+    _parse_get_ctrl,
     _parse_onvif_host,
     _rtsp_uri_with_credentials,
+    _v4l2_axis_sign,
+    capabilities_from_controls,
     handle_command,
+    parse_v4l2_controls,
     resolve_capabilities,
     should_reopen_camera,
 )
@@ -34,6 +38,16 @@ class FakePtzController:
 
 
 class CameraClientPtzTests(unittest.TestCase):
+    FULL_PTZ = (
+        "        pan_absolute 0x009a0908 (int)    : min=-36000 max=36000 step=3600 default=0 value=0\n"
+        "       tilt_absolute 0x009a0909 (int)    : min=-36000 max=36000 step=3600 default=0 value=0\n"
+        "       zoom_absolute 0x009a090d (int)    : min=100 max=400 step=1 default=100 value=100\n"
+    )
+    ZOOM_ONLY = (
+        "       zoom_absolute 0x009a090d (int)    : min=100 max=500 step=1 default=100 value=100\n"
+        "power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=1 value=1\n"
+    )
+
     def test_parse_onvif_host_uses_config_scheme_and_port(self):
         scheme, host, port = _parse_onvif_host("192.168.1.73", {"scheme": "http"})
         self.assertEqual((scheme, host, port), ("http", "192.168.1.73", None))
@@ -83,6 +97,32 @@ class CameraClientPtzTests(unittest.TestCase):
         self.assertFalse(should_reopen_camera(9, 10))
         self.assertTrue(should_reopen_camera(10, 10))
         self.assertFalse(should_reopen_camera(10, 0))
+
+    def test_parse_v4l2_controls_keeps_only_ptz(self):
+        controls = parse_v4l2_controls(self.ZOOM_ONLY)
+        self.assertIn("zoom_absolute", controls)
+        self.assertNotIn("power_line_frequency", controls)
+        self.assertEqual(controls["zoom_absolute"]["max"], 500)
+
+    def test_capabilities_from_controls(self):
+        self.assertEqual(
+            capabilities_from_controls(parse_v4l2_controls(self.FULL_PTZ)),
+            ["ptz", "patrol", "zoom"],
+        )
+        self.assertEqual(
+            capabilities_from_controls(parse_v4l2_controls(self.ZOOM_ONLY)),
+            ["zoom"],
+        )
+
+    def test_v4l2_axis_sign(self):
+        self.assertEqual(_v4l2_axis_sign("pan_left"), ("pan", -1))
+        self.assertEqual(_v4l2_axis_sign("zoom_in"), ("zoom", 1))
+        with self.assertRaises(ValueError):
+            _v4l2_axis_sign("bogus")
+
+    def test_parse_get_ctrl(self):
+        self.assertEqual(_parse_get_ctrl("pan_absolute: -7200\n", "pan_absolute"), -7200)
+        self.assertIsNone(_parse_get_ctrl("other: 3", "pan_absolute"))
 
     def test_resolve_capabilities_adds_ptz_when_controller_ready(self):
         caps = resolve_capabilities(["custom"], FakePtzController())

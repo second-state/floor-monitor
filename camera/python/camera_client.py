@@ -134,6 +134,80 @@ def encode_jpeg(img: Image.Image, quality: int = 85) -> bytes:
     return buf.getvalue()
 
 
+def parse_v4l2_controls(text: str) -> dict[str, dict[str, int]]:
+    """Parse `v4l2-ctl --list-ctrls`, keeping only pan/tilt/zoom controls."""
+    controls: dict[str, dict[str, int]] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if ":" not in line:
+            continue
+        head, tail = line.split(":", 1)
+        parts = head.split()
+        if not parts:
+            continue
+        name = parts[0]
+        if not (name.startswith("pan_") or name.startswith("tilt_") or name.startswith("zoom_")):
+            continue
+        ctrl: dict[str, int] = {}
+        for tok in tail.split():
+            if "=" in tok:
+                key, value = tok.split("=", 1)
+                try:
+                    ctrl[key] = int(value)
+                except ValueError:
+                    pass
+        controls[name] = ctrl
+    return controls
+
+
+def capabilities_from_controls(controls: dict[str, dict[str, int]]) -> list[str]:
+    """Map detected V4L2 controls to advertised capabilities."""
+    caps: list[str] = []
+    if any(c in controls for c in ("pan_absolute", "pan_relative", "tilt_absolute", "tilt_relative")):
+        caps += ["ptz", "patrol"]
+    if any(c in controls for c in ("zoom_absolute", "zoom_relative")):
+        caps.append("zoom")
+    return caps
+
+
+def _v4l2_axis_sign(direction: str) -> tuple[str, int]:
+    """Map a server direction to (axis, sign). +1 = pan_right/tilt_up/zoom_in."""
+    mapping = {
+        "pan_left": ("pan", -1),
+        "pan_right": ("pan", 1),
+        "tilt_down": ("tilt", -1),
+        "tilt_up": ("tilt", 1),
+        "zoom_out": ("zoom", -1),
+        "zoom_in": ("zoom", 1),
+    }
+    if direction not in mapping:
+        raise ValueError(f"Unsupported direction: {direction}")
+    return mapping[direction]
+
+
+def _parse_get_ctrl(output: str, name: str) -> int | None:
+    """Parse a single `v4l2-ctl --get-ctrl` line: `name: <int>`."""
+    for line in output.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            if key.strip() == name:
+                try:
+                    return int(value.strip())
+                except ValueError:
+                    return None
+    return None
+
+
+def _v4l2_run(args: list[str]) -> str:
+    """Default V4L2 command runner: invoke `v4l2-ctl`, raise on error."""
+    import subprocess
+
+    result = subprocess.run(["v4l2-ctl", *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "v4l2-ctl failed")
+    return result.stdout
+
+
 class OnvifPtzController:
     """Synchronous ONVIF PTZ controller used by the Python camera client."""
 
