@@ -223,6 +223,139 @@ impl CommandRunner for V4l2CtlRunner {
     }
 }
 
+/// Compute the signed delta for an axis step.
+pub fn signed_step(step: i64, dir: Dir, invert: bool) -> i64 {
+    let mag = step.abs();
+    let positive = matches!(dir, Dir::Pos) ^ invert;
+    if positive {
+        mag
+    } else {
+        -mag
+    }
+}
+
+/// Parse a single `v4l2-ctl --get-ctrl` line: `name: <int>`.
+pub fn parse_get_ctrl(output: &str, name: &str) -> Option<i64> {
+    for line in output.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim() == name {
+                return v.trim().parse::<i64>().ok();
+            }
+        }
+    }
+    None
+}
+
+/// V4L2 PTZ via `v4l2-ctl`. Prefers absolute controls (read/clamp/set), falls
+/// back to relative controls (momentary delta).
+pub struct V4l2CtlPtz {
+    pub device: String,
+    pub controls: V4l2Controls,
+    pub step_pan: i64,
+    pub step_tilt: i64,
+    pub step_zoom: i64,
+    pub invert_pan: bool,
+    pub invert_tilt: bool,
+    pub invert_zoom: bool,
+    pub runner: Box<dyn CommandRunner>,
+}
+
+impl V4l2CtlPtz {
+    /// (absolute control name, relative control name, step magnitude, invert).
+    fn axis_params(&self, axis: Axis) -> (&'static str, &'static str, i64, bool) {
+        match axis {
+            Axis::Pan => ("pan_absolute", "pan_relative", self.step_pan, self.invert_pan),
+            Axis::Tilt => (
+                "tilt_absolute",
+                "tilt_relative",
+                self.step_tilt,
+                self.invert_tilt,
+            ),
+            Axis::Zoom => (
+                "zoom_absolute",
+                "zoom_relative",
+                self.step_zoom,
+                self.invert_zoom,
+            ),
+        }
+    }
+}
+
+impl Ptz for V4l2CtlPtz {
+    fn step(&mut self, axis: Axis, dir: Dir) -> Result<(), String> {
+        let (abs, rel, step, invert) = self.axis_params(axis);
+        let delta = signed_step(step, dir, invert);
+        if let Some(ctrl) = self.controls.controls.get(abs).cloned() {
+            let out = self.runner.run(&[
+                "-d".into(),
+                self.device.clone(),
+                format!("--get-ctrl={abs}"),
+            ])?;
+            let current =
+                parse_get_ctrl(&out, abs).ok_or_else(|| format!("could not read {abs}"))?;
+            let target = (current + delta).clamp(ctrl.min, ctrl.max);
+            self.runner.run(&[
+                "-d".into(),
+                self.device.clone(),
+                format!("--set-ctrl={abs}={target}"),
+            ])?;
+            Ok(())
+        } else if self.controls.has(rel) {
+            self.runner.run(&[
+                "-d".into(),
+                self.device.clone(),
+                format!("--set-ctrl={rel}={delta}"),
+            ])?;
+            Ok(())
+        } else {
+            Err(format!("{axis:?} not supported by device {}", self.device))
+        }
+    }
+
+    fn home(&mut self) -> Result<(), String> {
+        for (abs, _rel, _step, _invert) in [
+            self.axis_params(Axis::Pan),
+            self.axis_params(Axis::Tilt),
+            self.axis_params(Axis::Zoom),
+        ] {
+            if let Some(ctrl) = self.controls.controls.get(abs).cloned() {
+                self.runner.run(&[
+                    "-d".into(),
+                    self.device.clone(),
+                    format!("--set-ctrl={abs}={}", ctrl.default),
+                ])?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Detect controls by running `v4l2-ctl --list-ctrls`. Empty on non-Linux or error.
+pub fn detect_controls(runner: &dyn CommandRunner, device: &str) -> V4l2Controls {
+    match runner.run(&["-d".into(), device.into(), "--list-ctrls".into()]) {
+        Ok(out) => parse_v4l2_controls(&out),
+        Err(_) => V4l2Controls::default(),
+    }
+}
+
+/// Build the controller: `V4l2CtlPtz` if any PTZ controls were detected, else `NoopPtz`.
+pub fn build_ptz(cfg: &PtzConfig, device: &str, controls: V4l2Controls) -> Box<dyn Ptz> {
+    if controls.is_empty() {
+        return Box::new(NoopPtz);
+    }
+    Box::new(V4l2CtlPtz {
+        device: device.to_string(),
+        controls,
+        step_pan: cfg.step_pan,
+        step_tilt: cfg.step_tilt,
+        step_zoom: cfg.step_zoom,
+        invert_pan: cfg.invert_pan,
+        invert_tilt: cfg.invert_tilt,
+        invert_zoom: cfg.invert_zoom,
+        runner: Box::new(V4l2CtlRunner),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +440,87 @@ power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=1 value=1
         let mut p = NoopPtz;
         assert!(p.step(Axis::Pan, Dir::Pos).is_err());
         assert!(p.home().is_err());
+    }
+
+    use std::sync::{Arc, Mutex};
+
+    /// Records every argv; answers `--get-ctrl` with a canned value.
+    struct FakeRunner {
+        get_value: i64,
+        calls: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+    impl CommandRunner for FakeRunner {
+        fn run(&self, args: &[String]) -> Result<String, String> {
+            self.calls.lock().unwrap().push(args.to_vec());
+            let joined = args.join(" ");
+            if joined.contains("--get-ctrl") {
+                let name = joined.rsplit("--get-ctrl=").next().unwrap_or("");
+                Ok(format!("{name}: {}\n", self.get_value))
+            } else {
+                Ok(String::new())
+            }
+        }
+    }
+
+    fn ptz_with(
+        controls: V4l2Controls,
+        get_value: i64,
+    ) -> (Arc<Mutex<Vec<Vec<String>>>>, V4l2CtlPtz) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let runner = FakeRunner {
+            get_value,
+            calls: calls.clone(),
+        };
+        let ptz = V4l2CtlPtz {
+            device: "/dev/video0".to_string(),
+            controls,
+            step_pan: 3600,
+            step_tilt: 1800,
+            step_zoom: 50,
+            invert_pan: false,
+            invert_tilt: false,
+            invert_zoom: false,
+            runner: Box::new(runner),
+        };
+        (calls, ptz)
+    }
+
+    #[test]
+    fn signed_step_applies_direction_and_invert() {
+        assert_eq!(signed_step(3600, Dir::Pos, false), 3600);
+        assert_eq!(signed_step(3600, Dir::Neg, false), -3600);
+        assert_eq!(signed_step(3600, Dir::Neg, true), 3600);
+    }
+
+    #[test]
+    fn parse_get_ctrl_reads_value() {
+        assert_eq!(
+            parse_get_ctrl("pan_absolute: -7200\n", "pan_absolute"),
+            Some(-7200)
+        );
+        assert_eq!(parse_get_ctrl("other: 5", "pan_absolute"), None);
+    }
+
+    #[test]
+    fn absolute_step_reads_clamps_and_sets() {
+        // pan max=36000; 34000 + 3600 = 37600 -> clamped to 36000.
+        let (calls, mut ptz) = ptz_with(parse_v4l2_controls(FULL_PTZ), 34000);
+        ptz.step(Axis::Pan, Dir::Pos).unwrap();
+        let set = calls.lock().unwrap().last().unwrap().join(" ");
+        assert!(set.contains("--set-ctrl=pan_absolute=36000"), "got: {set}");
+    }
+
+    #[test]
+    fn relative_step_sends_delta() {
+        let (calls, mut ptz) = ptz_with(parse_v4l2_controls(BCC950_RELATIVE), 0);
+        ptz.step(Axis::Pan, Dir::Neg).unwrap();
+        let set = calls.lock().unwrap().last().unwrap().join(" ");
+        assert!(set.contains("--set-ctrl=pan_relative=-3600"), "got: {set}");
+    }
+
+    #[test]
+    fn unsupported_axis_errors() {
+        let (_calls, mut ptz) = ptz_with(parse_v4l2_controls(ZOOM_ONLY), 0);
+        assert!(ptz.step(Axis::Pan, Dir::Pos).is_err());
     }
 }
