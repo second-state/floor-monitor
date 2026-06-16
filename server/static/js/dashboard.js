@@ -376,6 +376,10 @@ function sendPtz(direction) {
     sendCommand("ptz", { direction: direction });
 }
 
+function sendZoom(direction) {
+    sendCommand("zoom", { direction: direction });
+}
+
 function sendCommand(action, params) {
     showResult("ptz-result", "Sending " + action + "...", false);
 
