@@ -184,7 +184,6 @@ pub fn parse_direction(direction: &str) -> Option<(Axis, Dir)> {
 /// A motor controller. `step` moves one increment on an axis.
 pub trait Ptz: Send {
     fn step(&mut self, axis: Axis, dir: Dir) -> Result<(), String>;
-    fn home(&mut self) -> Result<(), String>;
 }
 
 /// Fallback for cameras with no PTZ hardware (also non-Linux). Errors if driven;
@@ -194,9 +193,6 @@ pub struct NoopPtz;
 
 impl Ptz for NoopPtz {
     fn step(&mut self, _axis: Axis, _dir: Dir) -> Result<(), String> {
-        Err("no PTZ hardware on this client".to_string())
-    }
-    fn home(&mut self) -> Result<(), String> {
         Err("no PTZ hardware on this client".to_string())
     }
 }
@@ -264,7 +260,12 @@ impl V4l2CtlPtz {
     /// (absolute control name, relative control name, step magnitude, invert).
     fn axis_params(&self, axis: Axis) -> (&'static str, &'static str, i64, bool) {
         match axis {
-            Axis::Pan => ("pan_absolute", "pan_relative", self.step_pan, self.invert_pan),
+            Axis::Pan => (
+                "pan_absolute",
+                "pan_relative",
+                self.step_pan,
+                self.invert_pan,
+            ),
             Axis::Tilt => (
                 "tilt_absolute",
                 "tilt_relative",
@@ -310,23 +311,6 @@ impl Ptz for V4l2CtlPtz {
         } else {
             Err(format!("{axis:?} not supported by device {}", self.device))
         }
-    }
-
-    fn home(&mut self) -> Result<(), String> {
-        for (abs, _rel, _step, _invert) in [
-            self.axis_params(Axis::Pan),
-            self.axis_params(Axis::Tilt),
-            self.axis_params(Axis::Zoom),
-        ] {
-            if let Some(ctrl) = self.controls.controls.get(abs).cloned() {
-                self.runner.run(&[
-                    "-d".into(),
-                    self.device.clone(),
-                    format!("--set-ctrl={abs}={}", ctrl.default),
-                ])?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -439,7 +423,6 @@ power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=1 value=1
     fn noop_ptz_reports_unsupported() {
         let mut p = NoopPtz;
         assert!(p.step(Axis::Pan, Dir::Pos).is_err());
-        assert!(p.home().is_err());
     }
 
     use std::sync::{Arc, Mutex};
