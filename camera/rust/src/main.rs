@@ -21,6 +21,8 @@ use tokio_tungstenite::{
 };
 use tracing::{error, info, warn};
 
+mod ptz;
+
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
