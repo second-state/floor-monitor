@@ -155,6 +155,29 @@ class CameraClientPtzTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             controller.move("pan_left")
 
+    def test_onvif_move_zoom_sends_zoom_velocity(self):
+        controller = OnvifPtzController.__new__(OnvifPtzController)
+        controller.zoom_speed = 0.4
+        controller.invert_zoom = False
+        controller.move_seconds = 0.0
+        sent = {}
+
+        def fake_continuous(pan, tilt, zoom):
+            sent["v"] = (pan, tilt, zoom)
+
+        controller._continuous_move = fake_continuous
+        controller.stop = lambda **kwargs: sent.setdefault("stopped", kwargs)
+
+        controller.move("zoom_in")
+        self.assertEqual(sent["v"], (0.0, 0.0, 0.4))
+
+    def test_onvif_capabilities_includes_zoom_when_supported(self):
+        controller = OnvifPtzController.__new__(OnvifPtzController)
+        controller.supports_zoom = True
+        self.assertEqual(controller.capabilities(), ["ptz", "patrol", "zoom"])
+        controller.supports_zoom = False
+        self.assertEqual(controller.capabilities(), ["ptz", "patrol"])
+
     def test_resolve_capabilities_adds_ptz_when_controller_ready(self):
         caps = resolve_capabilities(["custom"], FakePtzController())
         self.assertEqual(caps, ["custom", "ptz", "patrol"])

@@ -316,6 +316,9 @@ class OnvifPtzController:
         self.tilt_speed = _clamp_speed(float(onvif_cfg.get("tilt_speed", 0.35)))
         self.invert_pan = bool(onvif_cfg.get("invert_pan", False))
         self.invert_tilt = bool(onvif_cfg.get("invert_tilt", False))
+        self.zoom_speed = _clamp_speed(float(onvif_cfg.get("zoom_speed", 0.35)))
+        self.invert_zoom = bool(onvif_cfg.get("invert_zoom", False))
+        self.supports_zoom = onvif_cfg.get("zoom_speed") is not None
         self.patrol_steps = max(1, int(onvif_cfg.get("patrol_steps", 3)))
         self.patrol_pause_seconds = max(0.0, float(onvif_cfg.get("patrol_pause_seconds", 0.15)))
         self.configured_velocity_space = str(onvif_cfg.get("velocity_space", ""))
@@ -358,6 +361,12 @@ class OnvifPtzController:
             self.velocity_space = str(
                 getattr(ptz_config, "DefaultContinuousPanTiltVelocitySpace", "") or ""
             )
+        ptz_config = getattr(self.profile, "PTZConfiguration", None)
+        zoom_space = (
+            getattr(ptz_config, "DefaultContinuousZoomVelocitySpace", "") if ptz_config else ""
+        )
+        if zoom_space:
+            self.supports_zoom = True
         log.info(
             "ONVIF PTZ ready: profile_index=%d token=%s",
             self.profile_index,
@@ -372,8 +381,26 @@ class OnvifPtzController:
             self._connect()
             return fn()
 
+    def capabilities(self) -> list[str]:
+        caps = ["ptz", "patrol"]
+        if getattr(self, "supports_zoom", False):
+            caps.append("zoom")
+        return caps
+
     def move(self, direction: str):
         """Move briefly in one server command direction, then stop."""
+        if direction in ("zoom_in", "zoom_out"):
+            z = self.zoom_speed if direction == "zoom_in" else -self.zoom_speed
+            if self.invert_zoom:
+                z = -z
+            log.info("ONVIF PTZ zoom: direction=%s velocity=%.3f", direction, z)
+            self._continuous_move(0.0, 0.0, z)
+            try:
+                time.sleep(max(0.05, self.move_seconds))
+            finally:
+                self.stop(pan_tilt=False, zoom=True)
+            log.info("ONVIF PTZ zoom completed: %s", direction)
+            return
         x, y = _direction_velocity(
             direction,
             self.pan_speed,
@@ -388,11 +415,11 @@ class OnvifPtzController:
             y,
             max(0.05, self.move_seconds),
         )
-        self._continuous_move(x, y)
+        self._continuous_move(x, y, 0.0)
         try:
             time.sleep(max(0.05, self.move_seconds))
         finally:
-            self.stop()
+            self.stop(pan_tilt=True, zoom=False)
         log.info("ONVIF PTZ move completed: %s", direction)
 
     def patrol(self):
@@ -408,14 +435,17 @@ class OnvifPtzController:
                 if self.patrol_pause_seconds > 0:
                     time.sleep(self.patrol_pause_seconds)
 
-    def _continuous_move(self, pan: float, tilt: float):
+    def _continuous_move(self, pan: float, tilt: float, zoom: float = 0.0):
         def send():
             request = self.ptz.create_type("ContinuousMove")
             request.ProfileToken = self.profile_token
             pan_tilt = {"x": pan, "y": tilt}
             if self.velocity_space:
                 pan_tilt["space"] = self.velocity_space
-            request.Velocity = {"PanTilt": pan_tilt}
+            velocity = {"PanTilt": pan_tilt}
+            if zoom != 0.0:
+                velocity["Zoom"] = {"x": zoom}
+            request.Velocity = velocity
             self.ptz.ContinuousMove(request)
 
         self._call_with_reconnect("ContinuousMove", send)
@@ -440,12 +470,12 @@ class OnvifPtzController:
             raise RuntimeError("ONVIF media service returned no RTSP URI")
         return str(uri)
 
-    def stop(self):
+    def stop(self, pan_tilt: bool = True, zoom: bool = False):
         def send():
             request = self.ptz.create_type("Stop")
             request.ProfileToken = self.profile_token
-            request.PanTilt = True
-            request.Zoom = False
+            request.PanTilt = pan_tilt
+            request.Zoom = zoom
             self.ptz.Stop(request)
 
         self._call_with_reconnect("Stop", send)
