@@ -553,3 +553,28 @@ api_url = ""
         "Config::load should reject empty llm.api_url"
     );
 }
+
+#[test]
+fn test_classify_zoom_in() {
+    let intent = floor_monitor_server::llm::classify_keywords("zoom in");
+    match intent {
+        floor_monitor_server::llm::Intent::ZoomControl { direction } => {
+            assert_eq!(direction, "zoom_in");
+        }
+        other => panic!("expected ZoomControl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_zoom_intent_serde_roundtrip() {
+    let intent = floor_monitor_server::llm::Intent::ZoomControl {
+        direction: "zoom_out".to_string(),
+    };
+    let json = serde_json::to_string(&intent).unwrap();
+    assert_eq!(json, r#"{"intent":"zoom_control","direction":"zoom_out"}"#);
+    let parsed: floor_monitor_server::llm::Intent = serde_json::from_str(&json).unwrap();
+    assert!(matches!(
+        parsed,
+        floor_monitor_server::llm::Intent::ZoomControl { .. }
+    ));
+}

@@ -438,6 +438,27 @@ async fn handle_message(state: &AppState, notifier: &TelegramNotifier, text: &st
                 }
             }
         }
+        llm::Intent::ZoomControl { direction } => {
+            match crate::ws::send_command_to_any_camera(
+                state,
+                "zoom",
+                serde_json::json!({"direction": direction}),
+            )
+            .await
+            {
+                Ok(cam_id) => {
+                    notifier
+                        .send(&format!(
+                            "🔍 Zoom `{}` sent to camera `{}`",
+                            direction, cam_id
+                        ))
+                        .await;
+                }
+                Err(e) => {
+                    notifier.send(&format!("❌ {}", e)).await;
+                }
+            }
+        }
     }
 }
 
