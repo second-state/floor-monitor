@@ -612,22 +612,10 @@ def handle_command(
     message = "OK"
     changed_view = False
 
-    if action == "ptz":
-        direction = params.get("direction", "")
-        if ptz_controller is None:
-            success = False
-            message = "ONVIF PTZ is not configured or failed to initialize"
-        else:
-            try:
-                ptz_controller.move(direction)
-                message = f"PTZ {direction} completed"
-                changed_view = True
-                log.info(message)
-            except Exception as e:
-                log.warning("PTZ command failed: %s", e, exc_info=True)
-                success = False
-                message = f"PTZ {direction} failed: {e}"
-    elif action == "zoom":
+    if action in ("ptz", "zoom"):
+        # Pan/tilt and zoom are both momentary moves on the same controller;
+        # they differ only in the user-facing label.
+        label = "PTZ" if action == "ptz" else "Zoom"
         direction = params.get("direction", "")
         if ptz_controller is None:
             success = False
@@ -635,13 +623,13 @@ def handle_command(
         else:
             try:
                 ptz_controller.move(direction)
-                message = f"Zoom {direction} completed"
+                message = f"{label} {direction} completed"
                 changed_view = True
                 log.info(message)
             except Exception as e:
-                log.warning("Zoom command failed: %s", e, exc_info=True)
+                log.warning("%s command failed: %s", label, e, exc_info=True)
                 success = False
-                message = f"Zoom {direction} failed: {e}"
+                message = f"{label} {direction} failed: {e}"
     elif action == "patrol":
         if ptz_controller is None:
             success = False
