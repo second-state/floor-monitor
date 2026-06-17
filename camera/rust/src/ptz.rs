@@ -289,11 +289,20 @@ impl Ptz for V4l2CtlPtz {
                 format!("--set-ctrl={abs}={target}"),
             ])?;
             Ok(())
-        } else if self.controls.has(rel) {
+        } else if let Some(ctrl) = self.controls.controls.get(rel).cloned() {
+            // Relative controls advertise the valid delta range (e.g. the
+            // BCC950's *_relative is [-1, 1]); clamp the signed step so we never
+            // write an out-of-range value. Skip the clamp on a degenerate range
+            // (min > max from a partial line), mirroring the absolute path.
+            let bounded = if ctrl.min <= ctrl.max {
+                delta.clamp(ctrl.min, ctrl.max)
+            } else {
+                delta
+            };
             self.runner.run(&[
                 "-d".into(),
                 self.device.clone(),
-                format!("--set-ctrl={rel}={delta}"),
+                format!("--set-ctrl={rel}={bounded}"),
             ])?;
             Ok(())
         } else {
@@ -482,11 +491,13 @@ power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=1 value=1
     }
 
     #[test]
-    fn relative_step_sends_delta() {
+    fn relative_step_clamps_to_control_range() {
+        // BCC950 *_relative range is [-1, 1]; the configured step_pan=3600 must
+        // be clamped to the control's range, not written raw as -3600.
         let (calls, mut ptz) = ptz_with(parse_v4l2_controls(BCC950_RELATIVE), 0);
         ptz.step(Axis::Pan, Dir::Neg).unwrap();
         let set = calls.lock().unwrap().last().unwrap().join(" ");
-        assert!(set.contains("--set-ctrl=pan_relative=-3600"), "got: {set}");
+        assert!(set.contains("--set-ctrl=pan_relative=-1"), "got: {set}");
     }
 
     #[test]

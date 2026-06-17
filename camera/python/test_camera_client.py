@@ -52,6 +52,10 @@ class CameraClientPtzTests(unittest.TestCase):
         "       zoom_absolute 0x009a090d (int)    : min=100 max=500 step=1 default=100 value=100\n"
         "power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=1 value=1\n"
     )
+    BCC950_RELATIVE = (
+        "        pan_relative 0x009a0904 (int)    : min=-1 max=1 step=1 default=0 value=0\n"
+        "       tilt_relative 0x009a0905 (int)    : min=-1 max=1 step=1 default=0 value=0\n"
+    )
 
     def test_parse_onvif_host_uses_config_scheme_and_port(self):
         scheme, host, port = _parse_onvif_host("192.168.1.73", {"scheme": "http"})
@@ -149,6 +153,38 @@ class CameraClientPtzTests(unittest.TestCase):
         controller.move("pan_right")
         set_call = calls[-1]
         self.assertIn("--set-ctrl=pan_absolute=36000", set_call)
+
+    def test_v4l2_zoom_absolute_clamps(self):
+        # zoom_absolute range is [100, 400]; from 380, +step_zoom(50) -> 430,
+        # clamped to the max. Exercises the zoom axis the branch adds.
+        controller, calls = self._v4l2_controller(self.FULL_PTZ, get_value=380)
+        controller.move("zoom_in")
+        self.assertIn("--set-ctrl=zoom_absolute=400", calls[-1])
+
+    def test_v4l2_absolute_move_without_max_does_not_freeze(self):
+        # A control parsed without max= must not clamp the target back to the
+        # current value (which silently froze the axis); it advances by step.
+        calls = []
+
+        def runner(args):
+            calls.append(args)
+            if any("--get-ctrl" in a for a in args):
+                return "zoom_absolute: 100\n"
+            return ""
+
+        cfg = {"camera": {"device_index": 0}, "ptz": {}}
+        controller = V4l2PtzController(
+            cfg, runner=runner, controls={"zoom_absolute": {"min": 100}}
+        )
+        controller.move("zoom_in")
+        self.assertIn("--set-ctrl=zoom_absolute=150", calls[-1])
+
+    def test_v4l2_relative_move_clamps_to_range(self):
+        # BCC950 *_relative range is [-1, 1]; the default step_pan=3600 must be
+        # clamped to the control's range, not written raw as -3600.
+        controller, calls = self._v4l2_controller(self.BCC950_RELATIVE)
+        controller.move("pan_left")
+        self.assertIn("--set-ctrl=pan_relative=-1", calls[-1])
 
     def test_v4l2_capabilities(self):
         controller, _ = self._v4l2_controller(self.FULL_PTZ)

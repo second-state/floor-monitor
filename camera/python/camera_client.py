@@ -244,7 +244,10 @@ class V4l2PtzController:
     def move(self, direction: str):
         axis, sign = _v4l2_axis_sign(direction)
         abs_name, rel_name, step, invert = self._axis_params(axis)
-        delta = step * sign
+        # Use the magnitude and derive direction from sign/invert, matching the
+        # Rust client's signed_step (saturating_abs), so a negative configured
+        # step never makes the two clients move in opposite directions.
+        delta = abs(step) * sign
         if invert:
             delta = -delta
         if abs_name in self.controls:
@@ -253,12 +256,24 @@ class V4l2PtzController:
             if current is None:
                 raise RuntimeError(f"could not read {abs_name}")
             ctrl = self.controls[abs_name]
-            lo = ctrl.get("min", current)
-            hi = ctrl.get("max", current)
-            target = max(lo, min(hi, current + delta))
+            lo, hi = ctrl.get("min"), ctrl.get("max")
+            target = current + delta
+            # Skip clamping when the range is missing or degenerate (min > max
+            # from a partial --list-ctrls line), mirroring the Rust client; the
+            # old `ctrl.get("min", current)` fallback silently froze the axis.
+            if lo is not None and hi is not None and lo <= hi:
+                target = max(lo, min(hi, target))
             self.runner(["-d", self.device, f"--set-ctrl={abs_name}={target}"])
         elif rel_name in self.controls:
-            self.runner(["-d", self.device, f"--set-ctrl={rel_name}={delta}"])
+            # Relative controls advertise the valid delta range (the BCC950's
+            # *_relative is [-1, 1]); clamp so we never write an out-of-range
+            # value. Skip on a degenerate range, mirroring the absolute path.
+            ctrl = self.controls[rel_name]
+            lo, hi = ctrl.get("min"), ctrl.get("max")
+            bounded = delta
+            if lo is not None and hi is not None and lo <= hi:
+                bounded = max(lo, min(hi, delta))
+            self.runner(["-d", self.device, f"--set-ctrl={rel_name}={bounded}"])
         else:
             raise ValueError(f"{axis} not supported by device {self.device}")
         log.info("V4L2 PTZ move: %s on %s", direction, self.device)
