@@ -269,11 +269,14 @@ class V4l2PtzController:
             ("pan_right", self.patrol_steps * 2),
             ("pan_left", self.patrol_steps),
         )
-        for direction, count in sequence:
+        # Dwell between groups, not between individual steps: pan_left N, dwell,
+        # pan_right 2N, dwell, pan_left N. Matches the design spec and the Rust
+        # client so the same patrol_dwell_sec yields the same sweep timing.
+        for index, (direction, count) in enumerate(sequence):
             for _ in range(count):
                 self.move(direction)
-                if self.patrol_dwell > 0:
-                    time.sleep(self.patrol_dwell)
+            if index < len(sequence) - 1 and self.patrol_dwell > 0:
+                time.sleep(self.patrol_dwell)
 
     def stop(self):
         # Absolute/relative V4L2 controls are momentary; nothing to stop.

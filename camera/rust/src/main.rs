@@ -85,7 +85,9 @@ struct PtzRuntime {
     patrol_dwell: Duration,
 }
 
-/// Blocking left/right sweep, mirroring the Python ONVIF patrol.
+/// Blocking left/right sweep per the design spec: pan_left N, dwell,
+/// pan_right 2N, dwell, pan_left N — the dwell falls between groups, not
+/// between individual steps (kept in sync with the Python V4L2 patrol).
 async fn run_patrol(rt: &mut PtzRuntime) -> Result<(), String> {
     let n = rt.patrol_steps;
     let dwell = rt.patrol_dwell;
@@ -278,7 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ptz_runtime = PtzRuntime {
         ptz: ptz::build_ptz(&config.ptz, &ptz_device, detected),
         patrol_steps: config.ptz.patrol_steps,
-        patrol_dwell: Duration::from_secs_f64(config.ptz.patrol_dwell_sec),
+        patrol_dwell: Duration::from_secs_f64(config.ptz.patrol_dwell_sec.max(0.0)),
     };
 
     // Connection loop with auto-reconnect
