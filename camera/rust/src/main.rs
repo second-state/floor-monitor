@@ -95,7 +95,7 @@ async fn run_patrol(rt: &mut PtzRuntime) -> Result<(), String> {
         rt.ptz.step(Axis::Pan, Dir::Neg)?;
     }
     tokio::time::sleep(dwell).await;
-    for _ in 0..(2 * n) {
+    for _ in 0..n.saturating_mul(2) {
         rt.ptz.step(Axis::Pan, Dir::Pos)?;
     }
     tokio::time::sleep(dwell).await;
