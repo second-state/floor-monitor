@@ -245,6 +245,16 @@ pub fn signed_step(step: i64, dir: Dir, invert: bool) -> i64 {
     }
 }
 
+/// Clamp `x` into `[lo, hi]`, skipping a degenerate range (`lo > hi`, e.g. from
+/// a partial `--list-ctrls` line) since `i64::clamp` panics when `lo > hi`.
+fn clamp_to_range(lo: i64, hi: i64, x: i64) -> i64 {
+    if lo <= hi {
+        x.clamp(lo, hi)
+    } else {
+        x
+    }
+}
+
 /// Parse a single `v4l2-ctl --get-ctrl` line: `name: <int>`.
 pub fn parse_get_ctrl(output: &str, name: &str) -> Option<i64> {
     for line in output.lines() {
@@ -301,7 +311,9 @@ impl Ptz for V4l2CtlPtz {
     fn step(&mut self, axis: Axis, dir: Dir) -> Result<(), String> {
         let (abs, rel, step, invert) = self.axis_params(axis);
         let delta = signed_step(step, dir, invert);
-        if let Some(ctrl) = self.controls.controls.get(abs).cloned() {
+        // Copy just the range out so the `&self.controls` borrow drops before the
+        // `&self.runner` calls below (no need to clone the whole V4l2Control).
+        if let Some((lo, hi)) = self.controls.controls.get(abs).map(|c| (c.min, c.max)) {
             let out = self.runner.run(&[
                 "-d".into(),
                 self.device.clone(),
@@ -309,31 +321,20 @@ impl Ptz for V4l2CtlPtz {
             ])?;
             let current =
                 parse_get_ctrl(&out, abs).ok_or_else(|| format!("could not read {abs}"))?;
-            // Saturate the add, and skip clamping when the parsed range is
-            // degenerate (min > max from a partial `--list-ctrls` line):
-            // `i64::clamp` panics if min > max, which would abort the client.
-            let next = current.saturating_add(delta);
-            let target = if ctrl.min <= ctrl.max {
-                next.clamp(ctrl.min, ctrl.max)
-            } else {
-                next
-            };
+            // Saturate the add, then clamp to the control's range (skipped on a
+            // degenerate range to avoid an `i64::clamp` panic).
+            let target = clamp_to_range(lo, hi, current.saturating_add(delta));
             self.runner.run(&[
                 "-d".into(),
                 self.device.clone(),
                 format!("--set-ctrl={abs}={target}"),
             ])?;
             Ok(())
-        } else if let Some(ctrl) = self.controls.controls.get(rel).cloned() {
+        } else if let Some((lo, hi)) = self.controls.controls.get(rel).map(|c| (c.min, c.max)) {
             // Relative controls advertise the valid delta range (e.g. the
             // BCC950's *_relative is [-1, 1]); clamp the signed step so we never
-            // write an out-of-range value. Skip the clamp on a degenerate range
-            // (min > max from a partial line), mirroring the absolute path.
-            let bounded = if ctrl.min <= ctrl.max {
-                delta.clamp(ctrl.min, ctrl.max)
-            } else {
-                delta
-            };
+            // write an out-of-range value.
+            let bounded = clamp_to_range(lo, hi, delta);
             self.runner.run(&[
                 "-d".into(),
                 self.device.clone(),
