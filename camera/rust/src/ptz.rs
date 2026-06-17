@@ -99,56 +99,36 @@ pub fn resolve_capabilities(configured: &[String], detected: &[String]) -> Vec<S
 }
 
 /// `[ptz]` config block (shared key names with the Python client).
+///
+/// `#[serde(default)]` at the container level fills any field missing from the
+/// TOML using the `Default` impl below, so every default value lives in exactly
+/// one place (no per-field `default_*` fns to keep in sync).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct PtzConfig {
-    #[serde(default)]
     pub device: Option<String>,
-    #[serde(default = "default_step_pan")]
     pub step_pan: i64,
-    #[serde(default = "default_step_tilt")]
     pub step_tilt: i64,
-    #[serde(default = "default_step_zoom")]
     pub step_zoom: i64,
-    #[serde(default)]
     pub invert_pan: bool,
-    #[serde(default)]
     pub invert_tilt: bool,
-    #[serde(default)]
     pub invert_zoom: bool,
-    #[serde(default = "default_patrol_steps")]
     pub patrol_steps: u32,
-    #[serde(default = "default_patrol_dwell")]
     pub patrol_dwell_sec: f64,
-}
-
-fn default_step_pan() -> i64 {
-    3600
-}
-fn default_step_tilt() -> i64 {
-    1800
-}
-fn default_step_zoom() -> i64 {
-    50
-}
-fn default_patrol_steps() -> u32 {
-    4
-}
-fn default_patrol_dwell() -> f64 {
-    1.5
 }
 
 impl Default for PtzConfig {
     fn default() -> Self {
         PtzConfig {
             device: None,
-            step_pan: default_step_pan(),
-            step_tilt: default_step_tilt(),
-            step_zoom: default_step_zoom(),
+            step_pan: 3600,
+            step_tilt: 1800,
+            step_zoom: 50,
             invert_pan: false,
             invert_tilt: false,
             invert_zoom: false,
-            patrol_steps: default_patrol_steps(),
-            patrol_dwell_sec: default_patrol_dwell(),
+            patrol_steps: 4,
+            patrol_dwell_sec: 1.5,
         }
     }
 }
