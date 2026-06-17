@@ -221,7 +221,7 @@ impl CommandRunner for V4l2CtlRunner {
 
 /// Compute the signed delta for an axis step.
 pub fn signed_step(step: i64, dir: Dir, invert: bool) -> i64 {
-    let mag = step.abs();
+    let mag = step.saturating_abs();
     let positive = matches!(dir, Dir::Pos) ^ invert;
     if positive {
         mag
@@ -294,7 +294,15 @@ impl Ptz for V4l2CtlPtz {
             ])?;
             let current =
                 parse_get_ctrl(&out, abs).ok_or_else(|| format!("could not read {abs}"))?;
-            let target = (current + delta).clamp(ctrl.min, ctrl.max);
+            // Saturate the add, and skip clamping when the parsed range is
+            // degenerate (min > max from a partial `--list-ctrls` line):
+            // `i64::clamp` panics if min > max, which would abort the client.
+            let next = current.saturating_add(delta);
+            let target = if ctrl.min <= ctrl.max {
+                next.clamp(ctrl.min, ctrl.max)
+            } else {
+                next
+            };
             self.runner.run(&[
                 "-d".into(),
                 self.device.clone(),
