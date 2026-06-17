@@ -235,6 +235,7 @@ Ask me about the camera feed, or request a summary.\n\n\
 • `/snapshot` — current frame photo\n\
 • `/patrol` — sweep camera across the room\n\
 • `pan left` / `pan right` — move camera\n\
+• `zoom in` / `zoom out` — zoom camera\n\
 • `/help` · `/status`\n\n\
 Voice messages are also supported — just send a voice note!";
 
