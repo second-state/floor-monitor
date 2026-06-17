@@ -305,12 +305,12 @@ pub fn classify_keywords(text: &str) -> Intent {
             direction: "tilt_down".to_string(),
         };
     }
-    if low.contains("zoom in") || low == "/zoom in" || low.contains("zoom-in") {
+    if low.contains("zoom in") || low.contains("zoom-in") {
         return Intent::ZoomControl {
             direction: "zoom_in".to_string(),
         };
     }
-    if low.contains("zoom out") || low == "/zoom out" || low.contains("zoom-out") {
+    if low.contains("zoom out") || low.contains("zoom-out") {
         return Intent::ZoomControl {
             direction: "zoom_out".to_string(),
         };
