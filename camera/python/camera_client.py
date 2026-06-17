@@ -248,6 +248,17 @@ class V4l2PtzController:
             return "tilt_absolute", "tilt_relative", self.step_tilt, self.invert_tilt
         return "zoom_absolute", "zoom_relative", self.step_zoom, self.invert_zoom
 
+    @staticmethod
+    def _clamp_to_range(ctrl: dict, x: int) -> int:
+        """Clamp x into the control's [min, max]. Skip a missing or degenerate
+        range (min/max absent, or min > max from a partial --list-ctrls line),
+        mirroring the Rust client; the old `ctrl.get("min", current)` fallback
+        silently froze the axis."""
+        lo, hi = ctrl.get("min"), ctrl.get("max")
+        if lo is not None and hi is not None and lo <= hi:
+            return max(lo, min(hi, x))
+        return x
+
     def move(self, direction: str):
         axis, sign = _v4l2_axis_sign(direction)
         abs_name, rel_name, step, invert = self._axis_params(axis)
@@ -262,24 +273,12 @@ class V4l2PtzController:
             current = _parse_get_ctrl(out, abs_name)
             if current is None:
                 raise RuntimeError(f"could not read {abs_name}")
-            ctrl = self.controls[abs_name]
-            lo, hi = ctrl.get("min"), ctrl.get("max")
-            target = current + delta
-            # Skip clamping when the range is missing or degenerate (min > max
-            # from a partial --list-ctrls line), mirroring the Rust client; the
-            # old `ctrl.get("min", current)` fallback silently froze the axis.
-            if lo is not None and hi is not None and lo <= hi:
-                target = max(lo, min(hi, target))
+            target = self._clamp_to_range(self.controls[abs_name], current + delta)
             self.runner(["-d", self.device, f"--set-ctrl={abs_name}={target}"])
         elif rel_name in self.controls:
             # Relative controls advertise the valid delta range (the BCC950's
-            # *_relative is [-1, 1]); clamp so we never write an out-of-range
-            # value. Skip on a degenerate range, mirroring the absolute path.
-            ctrl = self.controls[rel_name]
-            lo, hi = ctrl.get("min"), ctrl.get("max")
-            bounded = delta
-            if lo is not None and hi is not None and lo <= hi:
-                bounded = max(lo, min(hi, delta))
+            # *_relative is [-1, 1]); clamp so we never write an out-of-range value.
+            bounded = self._clamp_to_range(self.controls[rel_name], delta)
             self.runner(["-d", self.device, f"--set-ctrl={rel_name}={bounded}"])
         else:
             raise ValueError(f"{axis} not supported by device {self.device}")
