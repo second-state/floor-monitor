@@ -279,7 +279,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let capabilities = ptz::resolve_capabilities(&config.camera.capabilities, &detected_caps);
     let mut ptz_runtime = PtzRuntime {
         ptz: ptz::build_ptz(&config.ptz, &ptz_device, detected),
-        patrol_steps: config.ptz.patrol_steps,
+        // Floor at 1 like the Python client's max(1, patrol_steps), so a
+        // configured 0 still sweeps instead of being a silent no-op.
+        patrol_steps: config.ptz.patrol_steps.max(1),
         patrol_dwell: Duration::from_secs_f64(config.ptz.patrol_dwell_sec.max(0.0)),
     };
 
