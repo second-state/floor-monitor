@@ -33,9 +33,12 @@ reopen_after_failures = 10
 # Drop this many buffered RTSP frames before encoding each dashboard frame.
 # Useful when OpenCV/FFmpeg lags behind a high-FPS IP camera stream.
 rtsp_flush_frames = 0
-# Reopen RTSP after successful PTZ/patrol commands so the displayed view
-# catches up immediately on cameras that buffer aggressively.
-reopen_after_ptz = true
+# Reopen the capture after successful PTZ/zoom/patrol commands so an
+# aggressively-buffered RTSP view catches up immediately. Defaults to true for
+# source_type = "rtsp" and false for "local" — a local UVC webcam needs no
+# reopen and would only stutter its feed on every move. Uncomment to override
+# the per-source default. (Python client only; the Rust client never reopens.)
+# reopen_after_ptz = true
 
 # Capabilities this camera supports. The server uses these to decide whether
 # to send movement commands. Common values: "ptz", "patrol", "zoom".
