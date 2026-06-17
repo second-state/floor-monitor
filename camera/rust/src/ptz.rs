@@ -514,4 +514,44 @@ power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=1 value=1
         let (_calls, mut ptz) = ptz_with(parse_v4l2_controls(ZOOM_ONLY), 0);
         assert!(ptz.step(Axis::Pan, Dir::Pos).is_err());
     }
+
+    #[test]
+    fn degenerate_range_skips_clamp_without_panic() {
+        // A partial `--list-ctrls` line (min= present, max= missing) leaves
+        // max at its Default of 0, so min > max. `i64::clamp` would panic on
+        // that range; step() must instead skip the clamp and write the raw sum.
+        let mut controls = HashMap::new();
+        controls.insert(
+            "zoom_absolute".to_string(),
+            V4l2Control {
+                min: 100,
+                max: 0,
+                step: 1,
+                default: 100,
+                value: 100,
+            },
+        );
+        let (calls, mut ptz) = ptz_with(V4l2Controls { controls }, 100);
+        ptz.step(Axis::Zoom, Dir::Pos).unwrap();
+        let set = calls.lock().unwrap().last().unwrap().join(" ");
+        // current 100 + step_zoom 50 = 150, written unclamped (no panic).
+        assert!(set.contains("--set-ctrl=zoom_absolute=150"), "got: {set}");
+    }
+
+    #[test]
+    fn absolute_step_saturates_instead_of_overflowing() {
+        // current at i64::MAX + a positive delta must saturate, not panic.
+        let (calls, mut ptz) = ptz_with(parse_v4l2_controls(FULL_PTZ), i64::MAX);
+        ptz.step(Axis::Pan, Dir::Pos).unwrap();
+        let set = calls.lock().unwrap().last().unwrap().join(" ");
+        // saturating_add -> i64::MAX, then clamped to pan max=36000.
+        assert!(set.contains("--set-ctrl=pan_absolute=36000"), "got: {set}");
+    }
+
+    #[test]
+    fn signed_step_saturates_extreme_magnitude() {
+        // step.abs() would panic on i64::MIN; saturating_abs yields i64::MAX.
+        assert_eq!(signed_step(i64::MIN, Dir::Pos, false), i64::MAX);
+        assert_eq!(signed_step(i64::MIN, Dir::Neg, false), -i64::MAX);
+    }
 }
