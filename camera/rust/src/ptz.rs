@@ -188,14 +188,49 @@ pub struct V4l2CtlRunner;
 
 impl CommandRunner for V4l2CtlRunner {
     fn run(&self, args: &[String]) -> Result<String, String> {
-        let output = std::process::Command::new("v4l2-ctl")
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        // Bound the call like the Python client's `timeout=5.0`: a wedged/busy
+        // UVC device can make v4l2-ctl hang, and this runs synchronously inside
+        // the client's async task, so an unbounded wait would stall the whole
+        // client (frame loop, WebSocket, reconnect) with no recovery. v4l2-ctl
+        // output is tiny, so reading the pipes after the child exits is safe.
+        let mut child = std::process::Command::new("v4l2-ctl")
             .args(args)
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| format!("failed to run v4l2-ctl: {e}"))?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err("v4l2-ctl timed out".to_string());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => return Err(format!("failed to wait for v4l2-ctl: {e}")),
+            }
+        };
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if let Some(mut out) = child.stdout.take() {
+            let _ = out.read_to_string(&mut stdout);
         }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        if let Some(mut err) = child.stderr.take() {
+            let _ = err.read_to_string(&mut stderr);
+        }
+        if !status.success() {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(stdout)
     }
 }
 
