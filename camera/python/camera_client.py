@@ -322,6 +322,8 @@ class OnvifPtzController:
         self.zoom_speed = _clamp_speed(float(onvif_cfg.get("zoom_speed", 0.35)))
         self.invert_zoom = bool(onvif_cfg.get("invert_zoom", False))
         self.supports_zoom = onvif_cfg.get("zoom_speed") is not None
+        # Filled from the profile's DefaultContinuousZoomVelocitySpace in _connect.
+        self.zoom_velocity_space = ""
         self.patrol_steps = max(1, int(onvif_cfg.get("patrol_steps", 3)))
         self.patrol_pause_seconds = max(0.0, float(onvif_cfg.get("patrol_pause_seconds", 0.15)))
         self.configured_velocity_space = str(onvif_cfg.get("velocity_space", ""))
@@ -358,17 +360,16 @@ class OnvifPtzController:
         self.profile_token = _profile_token(self.profile)
         if not self.profile_token:
             raise RuntimeError("ONVIF media profile has no token")
+        ptz_config = getattr(self.profile, "PTZConfiguration", None)
         self.velocity_space = self.configured_velocity_space
         if not self.velocity_space:
-            ptz_config = getattr(self.profile, "PTZConfiguration", None)
             self.velocity_space = str(
                 getattr(ptz_config, "DefaultContinuousPanTiltVelocitySpace", "") or ""
             )
-        ptz_config = getattr(self.profile, "PTZConfiguration", None)
-        zoom_space = (
-            getattr(ptz_config, "DefaultContinuousZoomVelocitySpace", "") if ptz_config else ""
+        self.zoom_velocity_space = str(
+            getattr(ptz_config, "DefaultContinuousZoomVelocitySpace", "") or ""
         )
-        if zoom_space:
+        if self.zoom_velocity_space:
             self.supports_zoom = True
         log.info(
             "ONVIF PTZ ready: profile_index=%d token=%s",
@@ -447,7 +448,10 @@ class OnvifPtzController:
                 pan_tilt["space"] = self.velocity_space
             velocity = {"PanTilt": pan_tilt}
             if zoom != 0.0:
-                velocity["Zoom"] = {"x": zoom}
+                zoom_velocity = {"x": zoom}
+                if self.zoom_velocity_space:
+                    zoom_velocity["space"] = self.zoom_velocity_space
+                velocity["Zoom"] = zoom_velocity
             request.Velocity = velocity
             self.ptz.ContinuousMove(request)
 
