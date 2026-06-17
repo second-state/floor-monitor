@@ -233,6 +233,35 @@ class CameraClientPtzTests(unittest.TestCase):
         self.assertTrue(ws.messages[0]["success"])
         self.assertEqual(ptz.moves, ["zoom_in"])
 
+    def test_zoom_command_without_controller_reports_zoom(self):
+        # The merged ptz/zoom arm must label the no-controller error per action,
+        # so a failed zoom reads "Zoom ..." rather than "PTZ ...".
+        ws = FakeWebSocket()
+        changed_view = handle_command(
+            ws,
+            {"action": "zoom", "params": {"direction": "zoom_in"}},
+            "cam1",
+            None,
+        )
+        self.assertFalse(changed_view)
+        self.assertFalse(ws.messages[0]["success"])
+        self.assertIn("Zoom", ws.messages[0]["message"])
+
+    def test_command_with_null_params_does_not_crash(self):
+        # An explicit "params": null from the server must coerce to {} instead
+        # of raising AttributeError on params.get(...).
+        ws = FakeWebSocket()
+        ptz = FakePtzController()
+        changed_view = handle_command(
+            ws,
+            {"action": "ptz", "params": None},
+            "cam1",
+            ptz,
+        )
+        self.assertTrue(changed_view)
+        self.assertTrue(ws.messages[0]["success"])
+        self.assertEqual(ptz.moves, [""])
+
     def test_build_ptz_controller_uses_v4l2_for_local(self):
         cfg = {"camera": {"source_type": "local", "device_index": 0}, "ptz": {}}
 

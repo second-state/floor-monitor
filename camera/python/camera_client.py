@@ -619,7 +619,7 @@ def handle_command(
         direction = params.get("direction", "")
         if ptz_controller is None:
             success = False
-            message = "PTZ is not configured or failed to initialize"
+            message = f"{label} is not configured or failed to initialize"
         else:
             try:
                 ptz_controller.move(direction)
@@ -633,7 +633,7 @@ def handle_command(
     elif action == "patrol":
         if ptz_controller is None:
             success = False
-            message = "ONVIF PTZ is not configured or failed to initialize"
+            message = "PTZ is not configured or failed to initialize"
         else:
             try:
                 ptz_controller.patrol()
