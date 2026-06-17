@@ -606,7 +606,7 @@ def handle_command(
     websocket,
     data: dict,
     camera_id: str,
-    ptz_controller: OnvifPtzController | None = None,
+    ptz_controller: Any | None = None,
 ) -> bool:
     """Handle a command message from the server."""
     action = data.get("action", "")
