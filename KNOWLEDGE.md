@@ -198,3 +198,27 @@ CI uses `ubuntu-24.04-arm` runners. The server build and all tests run on ARM. T
 ### Rust Cache
 
 CI uses `Swatinem/rust-cache@v2` with `workspaces: server` to cache only the server's target directory.
+
+## UVC PTZ via v4l2-ctl (camera clients)
+
+- **Capability name == action name.** The server routes commands with
+  `has_capability(action)` (`server/src/ws.rs`). `zoom` is therefore its own
+  action AND capability, separate from `ptz`, so zoom-only webcams (advertising
+  `["zoom"]`) and pan/tilt cameras coexist with no special-casing.
+- **Absolute vs relative controls.** Many Logitech webcams expose only
+  `*_absolute` (read current → add step → clamp to min/max → set). The BCC950
+  exposes only `*_relative` (write the signed delta; momentary). Drive whichever
+  exists; prefer absolute. `zoom_continuous`-only devices are not driven, and a
+  device advertises `zoom` only when `zoom_absolute`/`zoom_relative` is present.
+- **Keep the build cross-platform.** Shelling out to `v4l2-ctl` (vs the Linux-only
+  `v4l` crate) means the Rust camera client still compiles on macOS; detection
+  just returns nothing there and the client uses `NoopPtz`.
+- **Testability seam.** `CommandRunner` (Rust) / an injected `runner` (Python)
+  let the argv-building and clamping logic be unit-tested without hardware; only
+  the real subprocess call is untested. Real motor movement needs a Linux bench.
+- **`Send` bound on the runner trait.** The Rust `CommandRunner`/`Ptz` traits are
+  `: Send` (the controller is held across `.await` in the patrol loop), so test
+  fakes must be `Send` too — use `Arc<Mutex<…>>`, not `Rc<RefCell<…>>`.
+- **Capability resolution is additive.** Advertised = configured ∪ detected. An
+  explicit `[camera].capabilities` can force a capability but cannot suppress a
+  detected one (both clients behave identically).

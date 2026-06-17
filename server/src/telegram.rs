@@ -235,6 +235,8 @@ Ask me about the camera feed, or request a summary.\n\n\
 • `/snapshot` — current frame photo\n\
 • `/patrol` — sweep camera across the room\n\
 • `pan left` / `pan right` — move camera\n\
+• `tilt up` / `tilt down` — tilt camera\n\
+• `zoom in` / `zoom out` — zoom camera\n\
 • `/help` · `/status`\n\n\
 Voice messages are also supported — just send a voice note!";
 
@@ -351,6 +353,26 @@ async fn handle_voice(state: &AppState, notifier: &TelegramNotifier, file_id: &s
 }
 
 /// Handle a text message: classify intent (via LLM or keywords), dispatch.
+/// Route a movement command to a capable camera and reply. Dedups the
+/// Patrol/PTZ/Zoom arms, which differ only in the action name, params, and the
+/// success message built from the chosen camera id.
+async fn dispatch_camera_command(
+    state: &AppState,
+    notifier: &TelegramNotifier,
+    action: &str,
+    params: serde_json::Value,
+    on_ok: impl FnOnce(&str) -> String,
+) {
+    match crate::ws::send_command_to_any_camera(state, action, params).await {
+        Ok(cam_id) => {
+            notifier.send(&on_ok(&cam_id)).await;
+        }
+        Err(e) => {
+            notifier.send(&format!("❌ {}", e)).await;
+        }
+    }
+}
+
 async fn handle_message(state: &AppState, notifier: &TelegramNotifier, text: &str) {
     // Classify intent via the required LLM. Falls back to keyword matching
     // if the LLM call errors at request time (network blip, provider down).
@@ -400,43 +422,34 @@ async fn handle_message(state: &AppState, notifier: &TelegramNotifier, text: &st
                 .await;
         }
         llm::Intent::Patrol => {
-            match crate::ws::send_command_to_any_camera(
+            dispatch_camera_command(
                 state,
+                notifier,
                 "patrol",
                 serde_json::json!({"sweep": true}),
+                |cam_id| format!("🔄 Patrol command sent to camera `{}`", cam_id),
             )
-            .await
-            {
-                Ok(cam_id) => {
-                    notifier
-                        .send(&format!("🔄 Patrol command sent to camera `{}`", cam_id))
-                        .await;
-                }
-                Err(e) => {
-                    notifier.send(&format!("❌ {}", e)).await;
-                }
-            }
+            .await;
         }
         llm::Intent::PtzControl { direction } => {
-            match crate::ws::send_command_to_any_camera(
+            dispatch_camera_command(
                 state,
+                notifier,
                 "ptz",
                 serde_json::json!({"direction": direction}),
+                |cam_id| format!("🎯 PTZ `{}` sent to camera `{}`", direction, cam_id),
             )
-            .await
-            {
-                Ok(cam_id) => {
-                    notifier
-                        .send(&format!(
-                            "🎯 PTZ `{}` sent to camera `{}`",
-                            direction, cam_id
-                        ))
-                        .await;
-                }
-                Err(e) => {
-                    notifier.send(&format!("❌ {}", e)).await;
-                }
-            }
+            .await;
+        }
+        llm::Intent::ZoomControl { direction } => {
+            dispatch_camera_command(
+                state,
+                notifier,
+                "zoom",
+                serde_json::json!({"direction": direction}),
+                |cam_id| format!("🔍 Zoom `{}` sent to camera `{}`", direction, cam_id),
+            )
+            .await;
         }
     }
 }

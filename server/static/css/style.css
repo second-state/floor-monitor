@@ -405,3 +405,26 @@ main {
     width: 48px;
     height: 40px;
 }
+
+/* Zoom row under the PTZ pad */
+.zoom-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 10px;
+}
+.zoom-label {
+    font-size: 0.85rem;
+    color: var(--muted, #888);
+}
+/* Controls disabled because no connected camera advertises the capability */
+.ptz-btn:disabled,
+.ptz-btn.unsupported {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.ptz-btn:disabled:hover {
+    background: var(--card-bg);
+    border-color: var(--border);
+}

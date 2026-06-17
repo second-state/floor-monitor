@@ -51,16 +51,24 @@
             <!-- PTZ controls -->
             <div class="control-group">
                 <label>Camera Movement</label>
+                <!-- Buttons start disabled (fail-safe) and are enabled by
+                     refreshCapabilities() once a camera advertising the
+                     matching capability is connected. -->
                 <div class="ptz-grid">
                     <div class="ptz-spacer"></div>
-                    <button class="ptz-btn" onclick="sendPtz('tilt_up')" title="Tilt Up">&#9650;</button>
+                    <button class="ptz-btn" data-capability="ptz" disabled onclick="sendPtz('tilt_up')" title="Tilt Up">&#9650;</button>
                     <div class="ptz-spacer"></div>
-                    <button class="ptz-btn" onclick="sendPtz('pan_left')" title="Pan Left">&#9664;</button>
-                    <button class="ptz-btn ptz-center" onclick="sendCommand('patrol', {})" title="Patrol">&#8634;</button>
-                    <button class="ptz-btn" onclick="sendPtz('pan_right')" title="Pan Right">&#9654;</button>
+                    <button class="ptz-btn" data-capability="ptz" disabled onclick="sendPtz('pan_left')" title="Pan Left">&#9664;</button>
+                    <button class="ptz-btn ptz-center" data-capability="patrol" disabled onclick="sendCommand('patrol', {})" title="Patrol">&#8634;</button>
+                    <button class="ptz-btn" data-capability="ptz" disabled onclick="sendPtz('pan_right')" title="Pan Right">&#9654;</button>
                     <div class="ptz-spacer"></div>
-                    <button class="ptz-btn" onclick="sendPtz('tilt_down')" title="Tilt Down">&#9660;</button>
+                    <button class="ptz-btn" data-capability="ptz" disabled onclick="sendPtz('tilt_down')" title="Tilt Down">&#9660;</button>
                     <div class="ptz-spacer"></div>
+                </div>
+                <div class="zoom-row">
+                    <button class="ptz-btn" data-capability="zoom" disabled onclick="sendZoom('zoom_out')" title="Zoom Out">&#8722;</button>
+                    <span class="zoom-label">Zoom</span>
+                    <button class="ptz-btn" data-capability="zoom" disabled onclick="sendZoom('zoom_in')" title="Zoom In">&#43;</button>
                 </div>
                 <div id="ptz-result" class="control-result"></div>
             </div>

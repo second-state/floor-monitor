@@ -34,13 +34,18 @@ OpenAI-compatible APIs — the server itself loads no models.
   All HTML/CSS/JS in editable template files — no Rust recompile needed.
 - **Telegram bot** — Text and voice messages. Voice transcribed via ASR.
   LLM-based intent classification routes to visual Q&A, snapshots, PTZ control,
-  patrol, history summaries.
-- **Camera control** — Server sends PTZ and patrol commands to capable cameras
-  via WebSocket. Cameras report capabilities on registration; fixed cameras
-  (e.g. Mac webcam) are never sent movement commands. The Python client can
-  drive ONVIF PTZ cameras while using RTSP for video.
+  zoom control, patrol, history summaries.
+- **Camera control** — Server sends PTZ, zoom, and patrol commands to capable
+  cameras via WebSocket. Cameras report capabilities on registration; fixed
+  cameras (e.g. Mac webcam) are never sent movement commands. The Python client
+  can drive ONVIF PTZ cameras while using RTSP for video.
+- **UVC PTZ + zoom** — USB webcams with V4L2 PTZ controls (e.g. Logitech BCC950,
+  PTZ-capable Brio) can pan/tilt/zoom from the dashboard and Telegram on Linux.
+  Both clients shell out to `v4l2-ctl` (install `v4l-utils`); capabilities are
+  auto-detected from the device. Zoom-only webcams advertise just `zoom`.
 - **Dual camera clients** — Python (USB + RTSP + ONVIF PTZ) and Rust (USB only),
-  sharing the same `camera.toml` config format.
+  sharing the same `camera.toml` config format. Both drive UVC/USB PTZ via V4L2
+  on Linux.
 - **Multi-camera** — Multiple camera clients can connect simultaneously.
 
 ## Quick Start

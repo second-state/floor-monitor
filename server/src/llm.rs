@@ -20,6 +20,8 @@ pub enum Intent {
     Patrol,
     #[serde(rename = "ptz_control")]
     PtzControl { direction: String },
+    #[serde(rename = "zoom_control")]
+    ZoomControl { direction: String },
     #[serde(rename = "help")]
     Help,
     #[serde(rename = "status")]
@@ -53,6 +55,8 @@ Possible intents:
   Use when the user wants the camera to sweep/scan the room left-to-right.
 - {"intent":"ptz_control","direction":"<pan_left|pan_right|tilt_up|tilt_down>"}
   Use when the user wants to move the camera in a specific direction.
+- {"intent":"zoom_control","direction":"<zoom_in|zoom_out>"}
+  Use when the user wants to zoom the camera in or out.
 - {"intent":"help"}
   Use for greetings, help requests, or "how to use" questions.
 - {"intent":"status"}
@@ -299,6 +303,16 @@ pub fn classify_keywords(text: &str) -> Intent {
     if low.contains("tilt down") || low.contains("look down") {
         return Intent::PtzControl {
             direction: "tilt_down".to_string(),
+        };
+    }
+    if low.contains("zoom in") || low.contains("zoom-in") {
+        return Intent::ZoomControl {
+            direction: "zoom_in".to_string(),
+        };
+    }
+    if low.contains("zoom out") || low.contains("zoom-out") {
+        return Intent::ZoomControl {
+            direction: "zoom_out".to_string(),
         };
     }
     // History keywords

@@ -21,6 +21,9 @@ use tokio_tungstenite::{
 };
 use tracing::{error, info, warn};
 
+mod ptz;
+use ptz::{Axis, Dir, Ptz};
+
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
@@ -29,6 +32,8 @@ type WsRead = SplitStream<WsStream>;
 struct Config {
     server: ServerConfig,
     camera: CameraConfig,
+    #[serde(default)]
+    ptz: ptz::PtzConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,10 +78,40 @@ fn load_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
     Ok(config)
 }
 
-/// Handle a `command` message from the server: log it and ack it.
-/// Mirrors the Python client — we don't drive real motor hardware here,
-/// so PTZ/patrol commands are acknowledged but not acted upon.
-async fn handle_command(write: &mut WsWrite, camera_id: &str, data: &serde_json::Value) {
+/// Bundles the live controller with patrol parameters, threaded through the loop.
+struct PtzRuntime {
+    ptz: Box<dyn Ptz>,
+    patrol_steps: u32,
+    patrol_dwell: Duration,
+}
+
+/// Blocking left/right sweep per the design spec: pan_left N, dwell,
+/// pan_right 2N, dwell, pan_left N — the dwell falls between groups, not
+/// between individual steps (kept in sync with the Python V4L2 patrol).
+async fn run_patrol(rt: &mut PtzRuntime) -> Result<(), String> {
+    let n = rt.patrol_steps;
+    let dwell = rt.patrol_dwell;
+    for _ in 0..n {
+        rt.ptz.step(Axis::Pan, Dir::Neg)?;
+    }
+    tokio::time::sleep(dwell).await;
+    for _ in 0..n.saturating_mul(2) {
+        rt.ptz.step(Axis::Pan, Dir::Pos)?;
+    }
+    tokio::time::sleep(dwell).await;
+    for _ in 0..n {
+        rt.ptz.step(Axis::Pan, Dir::Neg)?;
+    }
+    Ok(())
+}
+
+/// Handle a `command` message: drive PTZ/zoom/patrol hardware, then ack.
+async fn handle_command(
+    write: &mut WsWrite,
+    camera_id: &str,
+    data: &serde_json::Value,
+    rt: &mut PtzRuntime,
+) {
     let action = data.get("action").and_then(|v| v.as_str()).unwrap_or("");
     let params = data
         .get("params")
@@ -84,25 +119,23 @@ async fn handle_command(write: &mut WsWrite, camera_id: &str, data: &serde_json:
         .unwrap_or(serde_json::Value::Null);
     info!("Received command: action={} params={}", action, params);
 
+    let direction = params
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
     let (success, message) = match action {
-        "ptz" => {
-            let direction = params
-                .get("direction")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            info!(
-                "PTZ command: {} (no PTZ hardware on this client)",
-                direction
-            );
-            (
-                true,
-                format!("PTZ {} acknowledged (no PTZ hardware)", direction),
-            )
-        }
-        "patrol" => {
-            info!("Patrol command (no PTZ hardware on this client)");
-            (true, "Patrol acknowledged (no PTZ hardware)".to_string())
-        }
+        "ptz" | "zoom" => match ptz::parse_direction(direction) {
+            Some((axis, dir)) => match rt.ptz.step(axis, dir) {
+                Ok(()) => (true, format!("{action} {direction} completed")),
+                Err(e) => (false, format!("{action} {direction} failed: {e}")),
+            },
+            None => (false, format!("unknown direction: {direction}")),
+        },
+        "patrol" => match run_patrol(rt).await {
+            Ok(()) => (true, "Patrol completed".to_string()),
+            Err(e) => (false, format!("Patrol failed: {e}")),
+        },
         other => {
             warn!("Unknown command action: {}", other);
             (false, format!("Unknown action: {}", other))
@@ -124,13 +157,18 @@ async fn handle_command(write: &mut WsWrite, camera_id: &str, data: &serde_json:
 /// Drain any pending command messages without blocking the frame loop.
 /// Called after a result arrives to handle commands that the server
 /// queued between cycles. Mirrors the Python client's 10ms recv loop.
-async fn drain_pending_commands(read: &mut WsRead, write: &mut WsWrite, camera_id: &str) -> bool {
+async fn drain_pending_commands(
+    read: &mut WsRead,
+    write: &mut WsWrite,
+    camera_id: &str,
+    rt: &mut PtzRuntime,
+) -> bool {
     loop {
         match tokio::time::timeout(Duration::from_millis(10), read.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) {
                     if data.get("type").and_then(|t| t.as_str()) == Some("command") {
-                        handle_command(write, camera_id, &data).await;
+                        handle_command(write, camera_id, &data, rt).await;
                     }
                 }
             }
@@ -225,6 +263,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let interval = Duration::from_secs_f64(config.camera.interval);
 
+    // Resolve the V4L2 device and detect PTZ controls once at startup.
+    let ptz_device = config
+        .ptz
+        .device
+        .clone()
+        .unwrap_or_else(|| format!("/dev/video{}", config.camera.device_index));
+    let detected = ptz::detect_controls(&ptz::V4l2CtlRunner, &ptz_device);
+    let detected_caps = ptz::capabilities_from_controls(&detected);
+    if detected.is_empty() {
+        info!("PTZ: no V4L2 controls on {ptz_device} (or v4l2-ctl unavailable)");
+    } else {
+        info!("PTZ: detected {detected_caps:?} on {ptz_device}");
+    }
+    let capabilities = ptz::resolve_capabilities(&config.camera.capabilities, &detected_caps);
+    let mut ptz_runtime = PtzRuntime {
+        ptz: ptz::build_ptz(&config.ptz, &ptz_device, detected),
+        // Floor at 1 like the Python client's max(1, patrol_steps), so a
+        // configured 0 still sweeps instead of being a silent no-op.
+        patrol_steps: config.ptz.patrol_steps.max(1),
+        patrol_dwell: Duration::from_secs_f64(config.ptz.patrol_dwell_sec.max(0.0)),
+    };
+
     // Connection loop with auto-reconnect
     loop {
         info!("Connecting to {} ...", config.server.ws_url);
@@ -238,7 +298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "type": "register",
                     "camera_id": config.camera.id,
                     "name": config.camera.name,
-                    "capabilities": config.camera.capabilities,
+                    "capabilities": capabilities,
                 });
                 if let Err(e) = write.send(Message::Text(register.to_string().into())).await {
                     warn!("Failed to send register: {}", e);
@@ -315,6 +375,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     &mut write,
                                                     &config.camera.id,
                                                     &data,
+                                                    &mut ptz_runtime,
                                                 )
                                                 .await;
                                             }
@@ -343,8 +404,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // Drain any commands queued behind the result.
-                            if !drain_pending_commands(&mut read, &mut write, &config.camera.id)
-                                .await
+                            if !drain_pending_commands(
+                                &mut read,
+                                &mut write,
+                                &config.camera.id,
+                                &mut ptz_runtime,
+                            )
+                            .await
                             {
                                 break;
                             }

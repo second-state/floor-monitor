@@ -24,18 +24,18 @@ camera/ (Python or Rust)          server/ (Rust/Axum)
 
 ### Core Features
 
-1. **WebSocket camera feed** — Camera clients register, stream JPEG frames; server processes and returns results. Server can also send commands (PTZ, patrol) back to camera clients.
+1. **WebSocket camera feed** — Camera clients register, stream JPEG frames; server processes and returns results. Server can also send commands (PTZ, zoom, patrol) back to camera clients.
 2. **Generic VLM/LLM backend** — Supports any OpenAI-compatible `/v1/chat/completions` endpoint (vLLM, OpenAI, Ollama with `--openai` flag, etc.). Separate `[vlm]` (vision) and `[llm]` (text/intent/summary) configuration. Both are **required**; `[llm]` drives intent classification and periodic activity summaries (so summaries don't depend on Telegram). The two sections can point at the same endpoint.
 3. **Web dashboard** — Live camera preview, analysis results via SSE, camera status. All HTML/CSS/JS in editable template files.
 4. **Monitor profiles** — Domain-specific structured JSON prompts (Kid / Office / Retail / Home Security) with alert pipeline (consecutive high-risk → Telegram notification) and periodic summary scheduler.
-5. **Telegram bot** — Text and voice messages. Voice messages transcribed via ASR (Whisper-compatible API). LLM-based intent classification routes to: visual question, snapshot, patrol, PTZ control, history summary, help, status.
-6. **Dual camera clients** — Python (full RTSP + USB support) and Rust (USB only), sharing the same `camera.toml` config format. Both handle server commands (PTZ, patrol).
+5. **Telegram bot** — Text and voice messages. Voice messages transcribed via ASR (Whisper-compatible API). LLM-based intent classification routes to: visual question, snapshot, patrol, PTZ control, zoom control, history summary, help, status.
+6. **Dual camera clients** — Python (full RTSP + USB support) and Rust (USB only), sharing the same `camera.toml` config format. Both handle server commands (PTZ, zoom, patrol). Both drive UVC/USB PTZ via `v4l2-ctl` on Linux (auto-detecting pan/tilt/zoom controls); the Python client additionally drives ONVIF network cameras. The `zoom` action/capability is distinct from `ptz`.
 
 ### Key Architecture Decisions
 
 - **Server-rendered templates** — Tera templates + vanilla JS. No npm/node/webpack. Templates are hot-reloadable without recompiling Rust.
 - **OpenAI-compatible APIs only** — All backends (VLM, LLM, ASR) use the standard OpenAI API format. Works with vLLM, OpenAI, Ollama (via its OpenAI-compatible endpoint), or any compliant provider. No model loading in the server process.
-- **WebSocket for camera feeds** — Bidirectional: camera sends frames, server sends back inference results and commands. Supports JSON (base64 JPEG) and binary (raw JPEG) frame encoding. Server→camera command channel enables PTZ control and patrol from Telegram.
+- **WebSocket for camera feeds** — Bidirectional: camera sends frames, server sends back inference results and commands. Supports JSON (base64 JPEG) and binary (raw JPEG) frame encoding. Server→camera command channel enables PTZ, zoom, and patrol control from Telegram.
 - **SSE for UI updates** — Dashboard receives live results without polling. Graceful reconnection on disconnect.
 
 For technical pitfalls behind these decisions, always consult **KNOWLEDGE.md** first.
