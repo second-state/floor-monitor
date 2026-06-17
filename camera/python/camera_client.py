@@ -408,7 +408,7 @@ class OnvifPtzController:
 
     def capabilities(self) -> list[str]:
         caps = ["ptz", "patrol"]
-        if getattr(self, "supports_zoom", False):
+        if self.supports_zoom:
             caps.append("zoom")
         return caps
 
