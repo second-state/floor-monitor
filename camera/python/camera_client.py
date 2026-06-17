@@ -202,7 +202,14 @@ def _v4l2_run(args: list[str]) -> str:
     """Default V4L2 command runner: invoke `v4l2-ctl`, raise on error."""
     import subprocess
 
-    result = subprocess.run(["v4l2-ctl", *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            ["v4l2-ctl", *args], capture_output=True, text=True, timeout=5.0
+        )
+    except subprocess.TimeoutExpired as e:
+        # A wedged/busy UVC device can make v4l2-ctl hang; bound it so the
+        # synchronous camera loop can't be blocked forever with no reconnect.
+        raise RuntimeError("v4l2-ctl timed out") from e
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "v4l2-ctl failed")
     return result.stdout
