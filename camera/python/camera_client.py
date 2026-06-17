@@ -603,7 +603,9 @@ def handle_command(
 ) -> bool:
     """Handle a command message from the server."""
     action = data.get("action", "")
-    params = data.get("params", {})
+    # `or {}` guards against an explicit "params": null in the server message,
+    # which would otherwise make params.get(...) raise AttributeError.
+    params = data.get("params") or {}
     log.info("Received command: action=%s params=%s", action, params)
 
     success = True
